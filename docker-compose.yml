@@ -5,45 +5,68 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: voicebharat_backend
+    container_name: stratum_backend
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://voiceuser:voicepass@postgres:5432/voicebharat
+      - DATABASE_URL=postgresql://stratum_user:stratum_secure_pass@postgres:5432/stratum_db
+      - REDIS_URL=redis://redis:6379/0
       - DEFAULT_TTS_PROVIDER=edge_tts
+      - ENVIRONMENT=production
+      - ALLOWED_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000","https://app.stratum-ai.com"]
     depends_on:
       - postgres
       - redis
     volumes:
-      - ./backend:/app
+      - ./backend/data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/api/health\")'"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: voicebharat_frontend
+    container_name: stratum_frontend
     ports:
-      - "3000:3000"
+      - "3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
   postgres:
     image: postgres:16-alpine
-    container_name: voicebharat_db
+    container_name: stratum_db
     environment:
-      POSTGRES_USER: voiceuser
-      POSTGRES_PASSWORD: voicepass
-      POSTGRES_DB: voicebharat
+      POSTGRES_USER: stratum_user
+      POSTGRES_PASSWORD: stratum_secure_pass
+      POSTGRES_DB: stratum_db
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stratum_user -d stratum_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    container_name: voicebharat_redis
+    container_name: stratum_redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
 volumes:
   pgdata:
