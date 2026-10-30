@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voicebharat_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://voiceuser:voicepass@postgres:5432/voicebharat
+      - DEFAULT_TTS_PROVIDER=edge_tts
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: voicebharat_frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: voicebharat_db
+    environment:
+      POSTGRES_USER: voiceuser
+      POSTGRES_PASSWORD: voicepass
+      POSTGRES_DB: voicebharat
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: voicebharat_redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:
