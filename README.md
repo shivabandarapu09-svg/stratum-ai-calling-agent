@@ -6,20 +6,22 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org)
 [![Tailwind CSS](https://img.shields.io/badge/TailwindCSS-3.4-indigo.svg)](https://tailwindcss.com)
 
-**Stratum AI** (`stratum`) is an enterprise-grade, human-indistinguishable multilingual AI calling platform engineered by synthesizing the strongest architectural layers of **Sarvam AI, Vapi, Retell AI, Bolna, Trikon, and Outpero**.
+**Stratum AI** (`stratum`) is a multilingual AI calling platform for configuring, testing and operating AI voice agents for business workflows.
+
+> Capability statements below describe what the code is designed to do. See `docs/engineering/EXISTING_FEATURE_AUDIT.md` for what has actually been verified.
 
 ---
 
-## 🌟 How Stratum AI Surpasses Existing AI Calling Platforms
+## 🌟 Stratum AI Architecture Layers
 
-| Architectural Layer | Reference Platform | Stratum AI Implementation |
-|---|---|---|
-| **Acoustic & Human Realism** | **Retell AI** | Real-time **Web Audio Office/Call-Center Soundscape**, subtle **CRM Keyboard Lookup SFX**, natural conversational micro-fillers, and `<120ms` barge-in suppression. |
-| **Indic Linguistic Mastery** | **Sarvam AI** | Native colloquial **Hinglish, Tenglish, Tanglish, and Indian English** mid-sentence code-switching with neural prosody control (`rate`, `pitch`) across 10 Indian languages. |
-| **Voice Pipeline & Tool Use** | **Vapi** | Live mid-call function execution (`query_verified_pricing_rag`, `dispatch_whatsapp_collateral`, `lock_calendar_appointment`, `sync_crm_qualified_lead`, `initiate_warm_sip_transfer`). |
-| **5-Stratum Sales Psychology** | **Trikon** | Structured 5-Layer Conversational State Machine (**1. Hook & Rapport → 2. Need Discovery → 3. Grounded Value Pitch → 4. Objection Resolution → 5. Action & Commitment**). |
-| **India Telephony & Compliance** | **Bolna** | Native Exotel, Plivo, and Twilio PSTN/SIP trunking, **TRAI 9 AM – 8 PM calling windows**, NDNC scrubbing, and IndiaMART / Justdial / Meta Lead Ads connectors. |
-| **Speed-to-Lead & BANT** | **Outpero** | **Sub-5-Second Speed-to-Lead** webhook auto-dialing, live BANT qualification scorecard, and **6 Pre-Trained Industry AI Employees**. |
+| Architectural Layer | Stratum AI Implementation |
+|---|---|
+| **Acoustic Realism** | Browser soundscape playback, conversational fillers, and barge-in handling. |
+| **Indic Language Handling** | Hinglish, Tenglish, Tanglish and Indian English code-switching detection with configurable speech rate and pitch. |
+| **Voice Pipeline & Tool Use** | Mid-call tool execution through the Stratum tool runtime (appointments, CRM updates, follow-ups, human handoff). |
+| **Conversational Stage Framework** | Five-stage conversation state machine (**1. Hook & Rapport → 2. Need Discovery → 3. Grounded Value Pitch → 4. Objection Resolution → 5. Action & Commitment**). |
+| **India Telephony & Compliance** | Exotel and Twilio carrier adapters, configurable TRAI 9 AM – 8 PM calling windows, and lead-source webhooks. |
+| **Speed-to-Lead & BANT** | Webhook-triggered lead calling, BANT qualification tracking, and 6 industry agent templates. |
 
 ---
 

@@ -184,7 +184,7 @@ class VoiceConversationSession:
         1. Caller Emotion/Sentiment
         2. Active 5-Stratum Conversational Layer
         3. Natural Backchannel Cue
-        4. Mid-Call Tool/Function Calls (Vapi/Retell style)
+        4. Mid-Call Tool/Function Calls (Stratum tool runtime)
         """
         low = clean_text.lower()
         tool_calls: List[Dict[str, Any]] = []

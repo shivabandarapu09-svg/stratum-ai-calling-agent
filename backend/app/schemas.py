@@ -39,7 +39,7 @@ class AgentBase(BaseModel):
     transfer_number: str = "+919876543210"
     consent_disclosure: str = "This call is recorded by Stratum AI for quality and training purposes."
 
-    # Stratum Human-Realism Controls (Retell AI + Vapi + Sarvam AI)
+    # Stratum Acoustic Realism Controls
     ambient_sound: Optional[str] = "office_call_center" # office_call_center, executive_room, warm_cafe, none
     backchannel_enabled: Optional[bool] = True
     filler_words_enabled: Optional[bool] = True

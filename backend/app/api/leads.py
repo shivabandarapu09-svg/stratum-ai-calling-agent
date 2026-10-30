@@ -4,7 +4,8 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import InboundLead, Customer, Agent, Call, Organization
+from app.models import InboundLead, Customer, Agent, Call, Organization, User
+from app.api.auth import get_current_user, resolve_current_user
 from app.schemas import InboundLeadCreate, InboundLeadOut, SpeedToLeadSimulateRequest, SpeedToLeadResponse
 from app.voice.conversation_engine import VoiceConversationSession
 
@@ -17,10 +18,12 @@ def utc_now():
 def get_inbound_leads(
     limit: int = Query(50, ge=1, le=100),
     source: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
-    """Retrieve all inbound leads captured via Meta, Google Ads, IndiaMART, or Webhooks."""
-    query = db.query(InboundLead)
+    """Retrieve all inbound leads captured for the active organization."""
+    user = resolve_current_user(current_user, db)
+    query = db.query(InboundLead).filter(InboundLead.organization_id == user.organization_id)
     if source:
         query = query.filter(InboundLead.source == source)
     leads = query.order_by(InboundLead.created_at.desc()).limit(limit).all()
@@ -31,7 +34,7 @@ def get_inbound_leads(
             "id": l.id,
             "organization_id": l.organization_id,
             "agent_id": l.agent_id,
-            "agent_name": l.agent.name if l.agent else "Outpero SDR",
+            "agent_name": l.agent.name if l.agent else "Unassigned Agent",
             "customer_id": l.customer_id,
             "call_id": l.call_id,
             "name": l.name,
@@ -150,18 +153,25 @@ async def receive_inbound_webhook(
 @router.post("/simulate", response_model=SpeedToLeadResponse)
 def simulate_speed_to_lead(
     payload: SpeedToLeadSimulateRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
-    Test Outpero's Sub-30-Second Speed-to-Lead Trigger live from the dashboard.
+    Test the Stratum Speed-to-Lead trigger from the dashboard.
     Simulates an instant Meta/Google lead submission and triggers an automated AI call.
     """
     t_start = time.time()
+    user = resolve_current_user(current_user, db)
     agent = db.query(Agent).filter(Agent.id == payload.agent_id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+    if user.role != "superadmin" and user.organization_id != agent.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-tenant access forbidden")
 
-    customer = db.query(Customer).filter(Customer.phone == payload.phone).first()
+    customer = db.query(Customer).filter(
+        Customer.phone == payload.phone,
+        Customer.organization_id == agent.organization_id
+    ).first()
     if not customer:
         customer = Customer(
             organization_id=agent.organization_id,

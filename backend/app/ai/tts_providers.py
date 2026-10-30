@@ -241,7 +241,7 @@ class SarvamTTSProvider(BaseTTSProvider):
 
 
 class ElevenLabsTTSProvider(BaseTTSProvider):
-    """ElevenLabs Multilingual v2 Ultra-Realistic Voice Provider (Vapi / Retell grade)."""
+    """ElevenLabs Multilingual v2 TTS provider adapter (optional third-party integration)."""
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or settings.ELEVENLABS_API_KEY
 

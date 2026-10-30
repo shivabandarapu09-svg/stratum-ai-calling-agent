@@ -62,14 +62,14 @@ class Agent(Base):
     transfer_number = Column(String(50), default="+919876543210")
     consent_disclosure = Column(Text, default="This call is recorded by Stratum AI for quality and verification purposes.")
 
-    # Stratum Human-Realism & Pipeline Controls (Retell AI + Vapi + Sarvam AI inspired)
+    # Stratum Acoustic Realism & Pipeline Controls
     ambient_sound = Column(String(50), default="office_call_center") # office_call_center, executive_room, warm_cafe, none
     backchannel_enabled = Column(Boolean, default=True)
     filler_words_enabled = Column(Boolean, default=True)
     interruption_sensitivity = Column(Float, default=0.85)
     endpointing_ms = Column(Integer, default=320)
 
-    # Qualification & Automation Capabilities (Trikon + Outpero + Bolna inspired)
+    # Qualification & Automation Capabilities
     qualification_framework = Column(String(50), default="BANT") # BANT, APPOINTMENT, ORDER_VERIFY, CUSTOM
     qualification_questions = Column(JSON, default=list)
     objection_rebuttals = Column(JSON, default=list) # [{objection: "...", rebuttal: "..."}]

@@ -1,4 +1,6 @@
 import os
+import secrets
+import hmac
 import hashlib
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import create_engine, text
@@ -21,8 +23,32 @@ def get_db():
     finally:
         db.close()
 
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+def hash_password(password: str, salt: str = "") -> str:
+    """
+    Cryptographically secure password hashing using PBKDF2-HMAC-SHA256 with random 16-byte salt
+    and 100,000 iterations.
+    """
+    if not salt:
+        salt = secrets.token_hex(16)
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100_000).hex()
+    return f"pbkdf2:sha256:{salt}:{derived}"
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """
+    Verifies passwords against salted PBKDF2 hash using constant-time comparison,
+    with backward-compatible support for legacy unsalted SHA-256 hashes.
+    """
+    if not hashed_password or not plain_password:
+        return False
+    if hashed_password.startswith("pbkdf2:sha256:"):
+        parts = hashed_password.split(":")
+        if len(parts) == 4:
+            salt = parts[2]
+            computed = hash_password(plain_password, salt=salt)
+            return hmac.compare_digest(computed, hashed_password)
+    # Legacy unsalted SHA-256 fallback
+    legacy = hashlib.sha256(plain_password.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(legacy, hashed_password)
 
 def utc_now():
     return datetime.now(timezone.utc)

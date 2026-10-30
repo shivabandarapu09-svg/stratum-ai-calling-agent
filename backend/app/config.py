@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./stratum.db"
     SECRET_KEY: str = "super-secret-jwt-key-stratum-ai-calling-2026"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    ALLOWED_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
 
     # AI Providers Configuration
     DEFAULT_LLM_PROVIDER: str = "mock"      # Options: groq, openai, mock
@@ -51,7 +59,7 @@ class Settings(BaseSettings):
     WHATSAPP_PHONE_NUMBER_ID: str = ""
     WHATSAPP_MOCK_ENABLED: bool = True
 
-    # Stratum Human-Realism Engine Defaults (Inspired by Retell AI, Vapi & Sarvam AI)
+    # Stratum Acoustic Realism Engine Defaults
     AMBIENT_SOUND_DEFAULT: str = "office_call_center"  # office_call_center, executive_room, warm_cafe, none
     BACKCHANNEL_ENABLED: bool = True
     FILLER_INJECTION_ENABLED: bool = True

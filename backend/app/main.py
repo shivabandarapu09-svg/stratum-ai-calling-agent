@@ -25,15 +25,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.APP_NAME,
-    description="Stratum AI — Hyper-Realistic Multilingual AI Calling Agent Platform synthesizing Sarvam AI, Vapi, Retell AI, Bolna, Trikon, and Outpero.",
+    description="Stratum AI — Multilingual AI Calling SaaS Platform.",
     version="3.0.0",
     lifespan=lifespan
 )
 
-# Enable CORS for frontend dashboard
+# Enable CORS with explicit origin allowlist
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

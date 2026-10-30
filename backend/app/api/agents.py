@@ -3,7 +3,8 @@ from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import Agent, Organization
+from app.models import Agent, Organization, User
+from app.api.auth import get_current_user, resolve_current_user
 from app.schemas import AgentCreate, AgentUpdate, AgentOut, VoicePreviewRequest
 from app.config import settings
 from app.ai.tts_providers import get_tts_provider
@@ -11,8 +12,12 @@ from app.ai.tts_providers import get_tts_provider
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
 @router.get("", response_model=List[AgentOut])
-def list_agents(db: Session = Depends(get_db)):
-    agents = db.query(Agent).all()
+def list_agents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    user = resolve_current_user(current_user, db)
+    agents = db.query(Agent).filter(Agent.organization_id == user.organization_id).all()
     return agents
 
 @router.get("/voices/available")
@@ -142,20 +147,29 @@ def get_blueprint_templates():
     ]
 
 @router.get("/{agent_id}", response_model=AgentOut)
-def get_agent(agent_id: str, db: Session = Depends(get_db)):
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+def get_agent(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    user = resolve_current_user(current_user, db)
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.organization_id == user.organization_id
+    ).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     return agent
 
 @router.post("", response_model=AgentOut, status_code=status.HTTP_201_CREATED)
-def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
-    org = db.query(Organization).first()
-    if not org:
-        raise HTTPException(status_code=400, detail="Organization not found")
-
+def create_agent(
+    payload: AgentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    user = resolve_current_user(current_user, db)
     agent = Agent(
-        organization_id=org.id,
+        organization_id=user.organization_id,
         name=payload.name,
         company=payload.company,
         purpose=payload.purpose,
@@ -188,8 +202,17 @@ def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
     return agent
 
 @router.put("/{agent_id}", response_model=AgentOut)
-def update_agent(agent_id: str, payload: AgentUpdate, db: Session = Depends(get_db)):
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+def update_agent(
+    agent_id: str,
+    payload: AgentUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    user = resolve_current_user(current_user, db)
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.organization_id == user.organization_id
+    ).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -202,8 +225,16 @@ def update_agent(agent_id: str, payload: AgentUpdate, db: Session = Depends(get_
     return agent
 
 @router.delete("/{agent_id}")
-def delete_agent(agent_id: str, db: Session = Depends(get_db)):
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+def delete_agent(
+    agent_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    user = resolve_current_user(current_user, db)
+    agent = db.query(Agent).filter(
+        Agent.id == agent_id,
+        Agent.organization_id == user.organization_id
+    ).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 

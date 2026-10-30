@@ -130,10 +130,9 @@ class OpenAILLMProvider(BaseLLMProvider):
 
 class DynamicConversationalEngine(BaseLLMProvider):
     """
-    Stratum AI's Multi-Layered Human-Realism Conversational Engine.
-    Synthesizes capabilities from Sarvam AI (colloquial Hinglish/Tenglish code-switching),
-    Retell AI (backchanneling, empathy openers, natural breath phrasing),
-    Vapi (mid-call function execution context), and Trikon/Outpero (5-Stratum BANT progression).
+    Stratum AI's rule-based fallback conversational engine.
+    Handles colloquial Hinglish/Tenglish code-switching, backchanneling and empathy openers,
+    mid-call tool execution context, and Stratum five-stage BANT progression.
     """
     async def generate_response(
         self,
@@ -160,7 +159,7 @@ class DynamicConversationalEngine(BaseLLMProvider):
         is_edtech = any(w in sp_low for w in ["admissions", "education", "course", "institute", "student", "mba", "syllabus"])
         is_ecommerce = any(w in sp_low for w in ["cod", "order", "delivery", "cash on delivery", "parcel", "urbantrend"])
         is_bfsi = any(w in sp_low for w in ["loan", "credit", "bank", "emi", "finserv", "interest rate", "bfsi", "overdraft"])
-        is_b2b_saas = any(w in sp_low for w in ["stratum", "outpero", "saas", "telecalling", "sdr", "leads", "crm"])
+        is_b2b_saas = any(w in sp_low for w in ["stratum", "saas", "telecalling", "sdr", "leads", "crm"])
 
         # -------------------------------------------------------------
         # 0. EXPLICIT LANGUAGE SWITCH REQUESTS
@@ -306,10 +305,10 @@ class DynamicConversationalEngine(BaseLLMProvider):
             if any(w in last_user_msg for w in ["fast", "leads", "speed", "volume", "inbound", "5,000", "5000", "month"]):
                 return "Oh, 5,000 leads a month is the exact sweet spot for Stratum AI! The moment a prospect submits a Meta or Google form, Stratum dials them in under 5 seconds—before they even lock their phone screen. Are you currently using HubSpot, Zoho, or LeadSquared as your CRM?"
             if any(w in last_user_msg for w in ["languages", "hindi", "telugu", "tamil", "english", "code", "switching", "voice", "realistic"]):
-                return "Yes, 100%! Unlike older robotic bots, Stratum uses Indic neural voices with natural backchanneling, office ambience, and mid-sentence Hinglish or Tenglish switching—callers genuinely think they're speaking with a top human SDR. Would you like to see a 20-minute live screen-share demo this Wednesday?"
+                return "Yes! Stratum uses conversational Indic neural voices with natural turn-taking, respectful pausing, and mid-sentence Hinglish or Tenglish switching to conduct professional customer inquiries as an AI assistant. Would you like to schedule a 20-minute live demonstration?"
             if any(w in last_user_msg for w in ["pricing", "cost", "per minute", "price"]):
                 return "We keep it super transparent—Stratum runs on a pure usage model starting at ₹4.50 per connected talk-minute, with zero setup fees and TRAI-compliant Exotel/Twilio routing included. Shall we lock a quick 20-minute walkthrough for Wednesday at 3 PM?"
-            return "Stratum AI combines Vapi-grade voice pipelines, Retell-style human backchanneling, and Sarvam Indic fluency to qualify your leads in under 30 seconds. Can I send our interactive architecture deck to your WhatsApp right now?"
+            return "Stratum AI is an AI calling assistant that can call new leads in Indian languages and record their qualification details for your team. Would it help if I sent you an overview on WhatsApp?"
 
         # -------------------------------------------------------------
         # 5. GROUNDED KNOWLEDGE BASE OR NATURAL CONVERSATIONAL FALLBACK

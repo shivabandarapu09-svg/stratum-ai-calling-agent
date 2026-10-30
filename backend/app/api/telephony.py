@@ -3,13 +3,14 @@ import re
 import html
 import time
 import httpx
-from fastapi import APIRouter, Request, Response, Depends, HTTPException, Query
+from fastapi import APIRouter, Request, Response, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.config import settings
-from app.models import Call
+from app.models import Call, User
+from app.api.auth import get_current_user, get_current_admin_user, resolve_current_user
 from app.voice.conversation_engine import VoiceConversationSession
 from app.ai.tts_providers import clean_text_for_speech
 from app.telephony.twilio_provider import TwilioProvider
@@ -90,7 +91,14 @@ def get_telephony_status():
     }
 
 @router.post("/config")
-def update_telephony_config(req: TelephonyConfigRequest):
+def update_telephony_config(
+    req: TelephonyConfigRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    user = resolve_current_user(current_user, db)
+    if user.role not in ("admin", "superadmin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
     env_updates = {}
     if req.provider:
         settings.TELEPHONY_PROVIDER = req.provider
@@ -146,7 +154,12 @@ def update_telephony_config(req: TelephonyConfigRequest):
     }
 
 @router.post("/test-connection")
-async def test_twilio_connection(req: TestConnectionRequest):
+async def test_twilio_connection(
+    req: TestConnectionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    user = resolve_current_user(current_user, db)
     sid = req.account_sid.strip() if req.account_sid else settings.TWILIO_ACCOUNT_SID
     token = req.auth_token.strip() if req.auth_token else settings.TWILIO_AUTH_TOKEN
 
@@ -296,6 +309,12 @@ async def twilio_twiml_endpoint(
       Streams studio-quality neural audio via `<Play>` with instant fallback to Polly Neural.
     - Optional `mode="stream"`: Plays greeting and opens bidirectional `<Connect><Stream>` WebSocket.
     """
+    # Validate carrier webhook signature if X-Twilio-Signature header is provided
+    if request is not None and request.headers.get("x-twilio-signature") and settings.TWILIO_AUTH_TOKEN:
+        valid, reason = await verify_twilio_webhook_request(request, enforce_signature=True)
+        if not valid:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Carrier signature rejected: {reason}")
+
     call = db.query(Call).filter(Call.id == call_id).first()
     if not call:
         fallback_xml = (
@@ -374,6 +393,13 @@ async def twilio_gather_turn_endpoint(
         form_data = await request.form()
         speech_result = str(form_data.get("SpeechResult") or "").strip()
 
+    # Validate carrier signature if X-Twilio-Signature header is provided
+    if request is not None and request.headers.get("x-twilio-signature") and settings.TWILIO_AUTH_TOKEN:
+        params_dict = dict(form_data) if 'form_data' in locals() else (body if isinstance(body, dict) else {})
+        valid, reason = await verify_twilio_webhook_request(request, body_params=params_dict, enforce_signature=True)
+        if not valid:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Carrier signature rejected: {reason}")
+
     if not speech_result:
         reprompt_url = settings.get_public_http_url(f"/api/telephony/twilio/reprompt/{call_id}?attempt=1", request)
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -448,6 +474,12 @@ async def twilio_reprompt_endpoint(
     Keeps the call alive if the customer paused after the greeting or previous response,
     prompting up to 2 times before ending cleanly.
     """
+    # Validate carrier webhook signature if X-Twilio-Signature header is provided
+    if request is not None and request.headers.get("x-twilio-signature") and settings.TWILIO_AUTH_TOKEN:
+        valid, reason = await verify_twilio_webhook_request(request, enforce_signature=True)
+        if not valid:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Carrier signature rejected: {reason}")
+
     call = db.query(Call).filter(Call.id == call_id).first()
     if not call:
         return Response(
@@ -510,6 +542,12 @@ async def twilio_status_callback(
     else:
         form_data = await request.form()
         payload = dict(form_data)
+
+    # Validate carrier signature if X-Twilio-Signature header is provided
+    if request is not None and request.headers.get("x-twilio-signature") and settings.TWILIO_AUTH_TOKEN:
+        valid, reason = await verify_twilio_webhook_request(request, body_params=payload, enforce_signature=True)
+        if not valid:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Carrier signature rejected: {reason}")
 
     raw_status = str(payload.get("CallStatus") or payload.get("call_status") or "").lower().strip()
     call_duration = payload.get("CallDuration") or payload.get("duration")

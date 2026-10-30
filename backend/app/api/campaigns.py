@@ -2,21 +2,31 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import Campaign, CampaignContact, Customer, Agent, Organization
+from app.models import Campaign, CampaignContact, Customer, Agent, Organization, User
+from app.api.auth import get_current_user, resolve_current_user
 from app.schemas import CampaignCreate, CampaignOut
 
 router = APIRouter(prefix="/campaigns", tags=["Campaigns"])
 
 @router.get("", response_model=List[CampaignOut])
-def list_campaigns(db: Session = Depends(get_db)):
-    camps = db.query(Campaign).order_by(Campaign.created_at.desc()).all()
+def list_campaigns(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    user = resolve_current_user(current_user, db)
+    camps = (
+        db.query(Campaign)
+        .filter(Campaign.organization_id == user.organization_id)
+        .order_by(Campaign.created_at.desc())
+        .all()
+    )
     out = []
     for c in camps:
         out.append(CampaignOut(
             id=c.id,
             name=c.name,
             agent_id=c.agent_id,
-            agent_name=c.organization.agents[0].name if c.organization.agents else "Krishi AI",
+            agent_name=c.organization.agents[0].name if c.organization.agents else "Stratum AI",
             status=c.status,
             total_contacts=c.total_contacts,
             completed_calls=c.completed_calls,
@@ -27,14 +37,19 @@ def list_campaigns(db: Session = Depends(get_db)):
     return out
 
 @router.post("", response_model=CampaignOut, status_code=status.HTTP_201_CREATED)
-def create_campaign(payload: CampaignCreate, db: Session = Depends(get_db)):
-    org = db.query(Organization).first()
-    agent = db.query(Agent).filter(Agent.id == payload.agent_id).first()
+def create_campaign(
+    payload: CampaignCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    user = resolve_current_user(current_user, db)
+    org_id = user.organization_id
+    agent = db.query(Agent).filter(Agent.id == payload.agent_id, Agent.organization_id == org_id).first()
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=404, detail="Agent not found in your organization")
 
     camp = Campaign(
-        organization_id=org.id,
+        organization_id=org_id,
         agent_id=payload.agent_id,
         name=payload.name,
         status="draft",
@@ -52,11 +67,11 @@ def create_campaign(payload: CampaignCreate, db: Session = Depends(get_db)):
         phone = item.get("phone")
         if not phone:
             continue
-        # Find or create customer
-        cust = db.query(Customer).filter(Customer.phone == phone).first()
+        # Find or create customer scoped to organization
+        cust = db.query(Customer).filter(Customer.phone == phone, Customer.organization_id == org_id).first()
         if not cust:
             cust = Customer(
-                organization_id=org.id,
+                organization_id=org_id,
                 name=item.get("name"),
                 phone=phone,
                 preferred_language=agent.default_language or "te",
@@ -91,8 +106,16 @@ def create_campaign(payload: CampaignCreate, db: Session = Depends(get_db)):
     )
 
 @router.post("/{campaign_id}/start")
-def start_campaign(campaign_id: str, db: Session = Depends(get_db)):
-    camp = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+def start_campaign(
+    campaign_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    user = resolve_current_user(current_user, db)
+    camp = db.query(Campaign).filter(
+        Campaign.id == campaign_id,
+        Campaign.organization_id == user.organization_id
+    ).first()
     if not camp:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
@@ -101,8 +124,16 @@ def start_campaign(campaign_id: str, db: Session = Depends(get_db)):
     return {"status": "success", "message": f"Campaign '{camp.name}' is now running"}
 
 @router.post("/{campaign_id}/pause")
-def pause_campaign(campaign_id: str, db: Session = Depends(get_db)):
-    camp = db.query(Campaign).filter(Campaign.id == campaign_id).first()
+def pause_campaign(
+    campaign_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    user = resolve_current_user(current_user, db)
+    camp = db.query(Campaign).filter(
+        Campaign.id == campaign_id,
+        Campaign.organization_id == user.organization_id
+    ).first()
     if not camp:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
