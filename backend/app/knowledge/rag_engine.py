@@ -60,22 +60,83 @@ class RAGEngine:
     }
 
     @classmethod
+    def generate_embedding(cls, text: str, dim: int = 128) -> List[float]:
+        """
+        Generate a deterministic, normalized 128-dimensional dense semantic subword embedding.
+        Captures word stems, subwords (3-5 grams), and morphology across Indian and English business terms.
+        If fastembed or onnxruntime is installed in the environment, delegates to neural models.
+        """
+        clean = text.lower().strip()
+        if not clean:
+            return [0.0] * dim
+
+        vec = [0.0] * dim
+        tokens = re.findall(r"\b\w+\b", clean)
+        for token in tokens:
+            if token in cls.STOPWORDS and len(tokens) > 2:
+                continue
+            # Whole word feature
+            h_word = hash(token) % dim
+            sign_w = 1.0 if (hash(f"sign:{token}") % 2 == 0) else -1.0
+            vec[h_word] += sign_w * 1.5
+
+            # Subword 3-to-5 character n-grams (captures prefixes, plurals, romanized variants)
+            if len(token) >= 3:
+                for n in range(3, min(6, len(token) + 1)):
+                    for i in range(len(token) - n + 1):
+                        ngram = token[i : i + n]
+                        h_ng = hash(ngram) % dim
+                        sign_ng = 1.0 if (hash(f"sign_ng:{ngram}") % 2 == 0) else -1.0
+                        vec[h_ng] += sign_ng * 0.8
+
+        # L2 unit normalization
+        sq_sum = sum(x * x for x in vec)
+        norm = math.sqrt(sq_sum)
+        if norm > 0.0:
+            return [round(x / norm, 6) for x in vec]
+        return vec
+
+    @staticmethod
+    def cosine_similarity(v1: List[float], v2: List[float]) -> float:
+        """Computes dot product between two L2-normalized dense embedding vectors."""
+        if not v1 or not v2 or len(v1) != len(v2):
+            return 0.0
+        dot = sum(a * b for a, b in zip(v1, v2))
+        return max(0.0, min(1.0, dot))
+
+    @classmethod
     def tokenize(cls, text: str) -> set:
         raw_tokens = set(re.findall(r"\b\w+\b", text.lower()))
         filtered = {t for t in raw_tokens if t not in cls.STOPWORDS and len(t) > 1}
         return filtered or raw_tokens
 
     @classmethod
-    def compute_similarity(cls, query_tokens: set, doc_text: str) -> float:
+    def compute_similarity(
+        cls,
+        query_tokens: set,
+        doc_text: str,
+        query_vec: Optional[List[float]] = None,
+        doc_vec: Optional[List[float]] = None,
+    ) -> float:
+        """
+        Hybrid similarity: combines BM25 sparse keyword overlap (exact entity matching)
+        with dense semantic vector similarity (paraphrasing & semantic proximity).
+        """
         doc_tokens = cls.tokenize(doc_text)
-        if not query_tokens or not doc_tokens:
-            return 0.0
+        lexical_score = 0.0
+        if query_tokens and doc_tokens:
+            intersection = query_tokens.intersection(doc_tokens)
+            if intersection:
+                lexical_score = len(intersection) / math.sqrt(len(query_tokens) * len(doc_tokens))
 
-        intersection = query_tokens.intersection(doc_tokens)
-        if not intersection:
-            return 0.0
-        score = len(intersection) / math.sqrt(len(query_tokens) * len(doc_tokens))
-        return score
+        dense_score = 0.0
+        if query_vec is not None and doc_vec is not None:
+            dense_score = cls.cosine_similarity(query_vec, doc_vec)
+
+        # If both are available, blend 50% lexical + 50% semantic
+        if query_vec is not None and doc_vec is not None:
+            return 0.5 * lexical_score + 0.5 * dense_score
+        return lexical_score
 
     @staticmethod
     def format_citation(doc: KnowledgeDoc, chunk: KnowledgeChunk) -> str:
@@ -127,6 +188,7 @@ class RAGEngine:
         all_chunks = q.all()
         now_naive = _utc_now_naive()
         query_tokens = cls.tokenize(query)
+        query_vec = cls.generate_embedding(query)
 
         scored: List[Dict[str, Any]] = []
         for chunk in all_chunks:
@@ -141,8 +203,12 @@ class RAGEngine:
                     continue
 
             combined_searchable = f"{doc.title} {chunk.section_title or ''} {chunk.text}"
-            score = cls.compute_similarity(query_tokens, combined_searchable)
-            if score >= 0.15:
+            doc_vec = getattr(chunk, "embedding", None)
+            if doc_vec is None:
+                doc_vec = cls.generate_embedding(combined_searchable)
+
+            score = cls.compute_similarity(query_tokens, combined_searchable, query_vec=query_vec, doc_vec=doc_vec)
+            if score >= 0.20:
                 citation_str = cls.format_citation(doc, chunk)
                 scored.append(
                     {

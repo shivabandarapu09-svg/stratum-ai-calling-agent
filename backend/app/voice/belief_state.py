@@ -51,6 +51,14 @@ INTENT_REQUIRED_SLOTS: Dict[str, List[str]] = {
     "modify_order_address": ["order_id", "new_address", "pincode"],
     "calculate_emi": ["loan_amount"],
     "request_brochure": [],  # Uses caller phone from session context
+    # Education Admissions Blueprint
+    "book_counseling_session": ["course_interest", "interview_date", "interview_time"],
+    "apply_scholarship": ["course_interest", "work_experience"],
+    # BFSI & FinTech Credit Advisor Blueprint
+    "apply_business_loan": ["loan_amount", "annual_turnover"],
+    "check_credit_eligibility": ["monthly_income", "credit_score_range"],
+    # B2B SaaS SDR Blueprint
+    "book_saas_demo": ["monthly_volume", "demo_date", "demo_time"],
 }
 
 # Multilingual localized slot labels for natural clarification questions
@@ -134,6 +142,86 @@ SLOT_LABELS_I18N: Dict[str, Dict[str, str]] = {
         "ta": "இஎம்ஐ கணக்கிட தோராயமான கடன் தொகை அல்லது பட்ஜெட்",
         "ml": "ഇഎംഐ കണക്കാക്കാൻ ഉദ്ദേശിക്കുന്ന ലോൺ തുക അല്ലെങ്കിൽ ബജറ്റ്",
         "kn": "ಇಎಂಐ ಲೆಕ್ಕಾಚಾರಕ್ಕಾಗಿ ಅಂದಾಜು ಸಾಲದ ಮೊತ್ತ ಅಥವಾ ಬಜೆಟ್",
+    },
+    "course_interest": {
+        "en": "which executive program you are interested in (e.g., Executive AI or Cloud Architecture)",
+        "hi": "आप किस प्रोग्राम में रुचि रखते हैं (जैसे एक्जीक्यूटिव एआई या क्लाउड आर्किटेक्चर)",
+        "te": "మీరు ఏ ప్రోగ్రామ్‌లో ఆసక్తి కలిగి ఉన్నారు (ఉదాహరణకు ఎగ్జిక్యూటివ్ ఏఐ లేదా క్లౌడ్ ఆర్కిటెక్చర్)",
+        "ta": "நீங்கள் எந்த படிப்பில் ஆர்வமாக உள்ளீர்கள் (எ.கா. எக்ஸிகியூட்டிவ் ஏஐ அல்லது கிளவுட்)",
+        "ml": "ഏത് കോഴ്സിലാണ് താല്പര്യം (എക്സിക്യൂട്ടീവ് എഐ അല്ലെങ്കിൽ ക്ലൗഡ് ആർക്കിടെക്ചർ)",
+        "kn": "ನೀವು ಯಾವ ಕೋರ್ಸ್‌ನಲ್ಲಿ ಆಸಕ್ತಿ ಹೊಂದಿದ್ದೀರಿ (ಎಕ್ಸಿಕ್ಯೂಟಿವ್ ಎಐ ಅಥವಾ ಕ್ಲೌಡ್ ಆರ್ಕಿಟೆಕ್ಚರ್)",
+    },
+    "interview_date": {
+        "en": "your preferred day or date for the counseling session",
+        "hi": "काउंसलिंग सेशन के लिए आपकी पसंदीदा तारीख या दिन",
+        "te": "కౌన్సిలింగ్ కోసం మీకు అనుకూలమైన రోజు లేదా తేదీ",
+        "ta": "ஆலோசனை அமர்விற்கான உங்கள் விருப்பமான நாள்",
+        "ml": "കൗൺസിലിംഗിന് അനുയോജ്യമായ ദിവസം",
+        "kn": "ಕೌನ್ಸೆಲಿಂಗ್‌ಗೆ ಅನುಕೂಲಕರವಾದ ದಿನಾಂಕ",
+    },
+    "interview_time": {
+        "en": "your preferred time slot for the faculty interview",
+        "hi": "इंटरव्यू के लिए आपका पसंदीदा समय (जैसे शाम 4:00 बजे)",
+        "te": "ఇంటర్వ్యూకి మీకు అనుకూలమైన సమయం (ఉదాహరణకు సాయంత్రం 4:00)",
+        "ta": "நேர்காணலுக்கான உங்கள் விருப்பமான நேரம்",
+        "ml": "ഇന്റർവ്യൂവിന് സൗകര്യപ്രദമായ സമയം",
+        "kn": "ಸಂದರ್ಶನಕ್ಕೆ ಅನುಕೂಲಕರವಾದ ಸಮಯ",
+    },
+    "work_experience": {
+        "en": "your total years of professional work experience",
+        "hi": "आपका कुल कार्य अनुभव कितने वर्षों का है",
+        "te": "మీకు ఎన్ని సంవత్సరాల పని అనుభవం ఉంది",
+        "ta": "உங்கள் மொத்த பணி அனுபவம் எத்தனை ஆண்டுகள்",
+        "ml": "നിങ്ങൾക്ക് എത്ര വർഷത്തെ പ്രവൃത്തിപരിചയം ഉണ്ട്",
+        "kn": "ನಿಮ್ಮ ಒಟ್ಟು ಕೆಲಸದ ಅನುಭವ ಎಷ್ಟು ವರ್ಷಗಳು",
+    },
+    "annual_turnover": {
+        "en": "your business's approximate annual turnover or revenue",
+        "hi": "आपके व्यवसाय का अनुमानित वार्षिक टर्नओवर",
+        "te": "మీ వ్యాపారం యొక్క వార్షిక టర్నోవర్ సుమారు ఎంత",
+        "ta": "உங்கள் வணிகத்தின் தோராயமான ஆண்டு வருவாய்",
+        "ml": "നിങ്ങളുടെ ബിസിനസ്സിന്റെ വാർഷിക വിറ്റുവരവ്",
+        "kn": "ನಿಮ್ಮ ವ್ಯಾಪಾರದ ವಾರ್ಷಿಕ ವಹಿವಾಟು ಎಷ್ಟು",
+    },
+    "monthly_income": {
+        "en": "your approximate net monthly income or revenue",
+        "hi": "आपकी अनुमानित मासिक आय",
+        "te": "మీ సుమారు నెలవారీ ఆదాయం",
+        "ta": "உங்கள் தோராயமான மாத வருமானம்",
+        "ml": "നിങ്ങളുടെ പ്രതിമാസ വരുമാനം",
+        "kn": "ನಿಮ್ಮ ಮಾಸಿಕ ಆದಾಯ",
+    },
+    "credit_score_range": {
+        "en": "your approximate CIBIL or credit score range (e.g. 750+)",
+        "hi": "आपका अनुमानित सिबिल या क्रेडिट स्कोर (जैसे 750 से अधिक)",
+        "te": "మీ సుమారు సిబిల్ లేదా క్రెడిట్ స్కోరు (ఉదా. 750+)",
+        "ta": "உங்கள் தோராயமான கிரெடிட் ஸ்கோர்",
+        "ml": "നിങ്ങളുടെ സിബിൽ സ്കോർ",
+        "kn": "ನಿಮ್ಮ ಸಿಬಿಲ್ లేదా ಕ್ರೆಡಿಟ್ ಸ್ಕೋರ್",
+    },
+    "monthly_volume": {
+        "en": "your team's approximate monthly call or lead volume",
+        "hi": "आपकी टीम का अनुमानित मासिक कॉल या लीड वॉल्यूम",
+        "te": "మీ నెలవారీ కాల్స్ లేదా లీడ్స్ సంఖ్య సుమారు ఎంత",
+        "ta": "உங்கள் குழுவின் தோராயமான மாதாந்திர அழைப்பு எண்ணிக்கை",
+        "ml": "നിങ്ങളുടെ പ്രതിമാസ കോൾ വോളിയം",
+        "kn": "ನಿಮ್ಮ ಮಾಸಿಕ ಕಾಲ್ ವಾಲ್ಯೂಮ್",
+    },
+    "demo_date": {
+        "en": "your preferred date for the live architecture demo",
+        "hi": "लाइव डेमो के लिए आपकी पसंदीदा तारीख या दिन",
+        "te": "లైవ్ డెమో కోసం మీకు అనుకూలమైన రోజు లేదా తేదీ",
+        "ta": "நேரடி செயல்முறை விளக்கத்திற்கான நாள்",
+        "ml": "ഡെമോയ്ക്ക് അനുയോജ്യമായ ദിവസം",
+        "kn": "ಡೆಮೊಗಾಗಿ ಅನುಕೂಲಕರವಾದ ದಿನಾಂಕ",
+    },
+    "demo_time": {
+        "en": "your preferred time slot for the 20-minute live demo",
+        "hi": "20 मिनट के लाइव डेमो के लिए आपका पसंदीदा समय",
+        "te": "20 నిమిషాల లైవ్ డెమో కోసం మీకు అనుకూలమైన సమయం",
+        "ta": "20 நிமிட நேரடி விளக்கத்திற்கான நேரம்",
+        "ml": "20 മിനിറ്റ് ഡെമോയ്ക്ക് സൗകര്യപ്രദമായ സമയം",
+        "kn": "20 ನಿಮಿಷಗಳ ಡೆಮೊಗಾಗಿ ಅನುಕೂಲಕರವಾದ ಸಮಯ",
     },
 }
 
@@ -437,13 +525,83 @@ class SessionBeliefState:
                     self._update_slot("cancellation_reason", kw)
                     break
 
-        # I. Loan Amount / Budget for EMI calculation
-        amt_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(cr|crore|crores|lakh|lakhs|lac|lacs)\b", lower)
-        if amt_match:
-            val = float(amt_match.group(1))
-            unit = amt_match.group(2)
+        # I. Loan Amount / Budget for EMI calculation / Business Loan
+        loan_match = re.search(r"(?:loan|capital|borrow|need|require|amount|budget|funding)\s*(?:of|is|around|approximately)?\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(cr|crore|crores|lakh|lakhs|lac|lacs)\b", lower)
+        if loan_match:
+            val = float(loan_match.group(1))
+            unit = loan_match.group(2)
             lakhs = val * 100.0 if unit.startswith("cr") else val
             self._update_slot("loan_amount", f"{lakhs:.1f} Lakhs")
+        else:
+            amt_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(cr|crore|crores|lakh|lakhs|lac|lacs)\b", lower)
+            if amt_match and not any(w in lower for w in ["turnover", "revenue", "sales"]):
+                val = float(amt_match.group(1))
+                unit = amt_match.group(2)
+                lakhs = val * 100.0 if unit.startswith("cr") else val
+                self._update_slot("loan_amount", f"{lakhs:.1f} Lakhs")
+
+        # J. Course Interest (Education Admissions)
+        course_map = {
+            "Executive AI": ["executive ai", "exec ai", "ai program", "generative ai", "genai", "ai & machine learning", "एक्जीक्यूटिव एआई"],
+            "Cloud Architecture": ["cloud architecture", "cloud architect", "cloud computing", "aws", "azure", "क्लाउड"],
+            "Data Science": ["data science", "data scientist", "analytics", "डेटा साइंस"],
+            "Full Stack": ["full stack", "fullstack", "web development", "सॉफ्टवेयर"],
+        }
+        for course_name, kws in course_map.items():
+            if any(kw in lower for kw in kws):
+                self._update_slot("course_interest", course_name)
+                break
+
+        # K. Work Experience (Education Admissions)
+        exp_match = re.search(r"\b(\d{1,2})\s*(?:years?|yrs?|yr)\b", lower)
+        if exp_match and ("experience" in lower or "working" in lower or "exp" in lower or self.template_domain == "education_admissions"):
+            exp_yrs = int(exp_match.group(1))
+            self._update_slot("work_experience", f"{exp_yrs} Years")
+
+        # L. Annual Turnover & Monthly Income (BFSI & FinTech)
+        if any(w in lower for w in ["turnover", "revenue", "sales", "वार्षिक टर्नओवर"]):
+            to_match = re.search(r"(?:turnover|revenue|sales|वार्षिक टर्नओवर)\s*(?:is|of|around|approx|approximately)?\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(cr|crore|crores|lakh|lakhs|lac|lacs)\b", lower)
+            if not to_match:
+                to_match = re.search(r"(\d+(?:\.\d+)?)\s*(cr|crore|crores|lakh|lakhs|lac|lacs)\s*(?:turnover|revenue|sales)\b", lower)
+            if to_match:
+                to_val = float(to_match.group(1))
+                to_unit = to_match.group(2)
+                to_lakhs = to_val * 100.0 if to_unit.startswith("cr") else to_val
+                self._update_slot("annual_turnover", f"{to_lakhs:.1f} Lakhs")
+
+        if any(w in lower for w in ["salary", "income", "monthly income", "take home", "मासिक आय"]):
+            sal_match = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:lakh|lakhs|lac|lacs|k|thousand)\b", lower)
+            if sal_match:
+                self._update_slot("monthly_income", f"{sal_match.group(0)}")
+
+        # Credit Score (BFSI & FinTech)
+        score_match = re.search(r"\b([3-9]\d{2})\b", lower)
+        if score_match and ("cibil" in lower or "credit score" in lower or "score" in lower or self.template_domain == "bfsi_fintech"):
+            score_num = int(score_match.group(1))
+            if 300 <= score_num <= 900:
+                self._update_slot("credit_score_range", f"{score_num}")
+
+        # M. Monthly Volume (B2B SaaS SDR)
+        vol_match = re.search(r"\b(\d{1,3}(?:,\d{3})*|\d+)\s*(?:k|thousand)?\s*(?:calls|leads|contacts|dials|minutes)\b", lower)
+        if vol_match or ("leads" in lower or "calls per month" in lower or "volume" in lower):
+            vol_digits = re.search(r"\b(\d+(?:,\d+)?)\s*(?:k)?\b", lower)
+            if vol_digits and ("call" in lower or "lead" in lower or "volume" in lower or self.template_domain == "b2b_saas_sdr"):
+                self._update_slot("monthly_volume", vol_digits.group(0).strip())
+
+        # N. Mirror Date & Time slots for education counseling and SaaS demos
+        if "visit_date" in self.collected_slots:
+            v_date = self.collected_slots["visit_date"]
+            if self.template_domain == "education_admissions" or self.active_intent == "book_counseling_session":
+                self._update_slot("interview_date", v_date)
+            elif self.template_domain == "b2b_saas_sdr" or self.active_intent == "book_saas_demo":
+                self._update_slot("demo_date", v_date)
+
+        if "visit_time" in self.collected_slots:
+            v_time = self.collected_slots["visit_time"]
+            if self.template_domain == "education_admissions" or self.active_intent == "book_counseling_session":
+                self._update_slot("interview_time", v_time)
+            elif self.template_domain == "b2b_saas_sdr" or self.active_intent == "book_saas_demo":
+                self._update_slot("demo_time", v_time)
 
     def _detect_infeasibility_flags(self, lower: str) -> None:
         # 1. Policy-Infeasible Checks
@@ -493,6 +651,19 @@ class SessionBeliefState:
         # e) Unserviceable pincode (e.g. 999999 or 000000)
         if self.collected_slots.get("pincode") in ["999999", "888888"]:
             self.tool_infeasible_flag = "unserviceable_delivery_pincode"
+
+        # f) Education Admissions: Executive AI requires min 2 years experience
+        if self.template_domain == "education_admissions" and self.collected_slots.get("course_interest") == "Executive AI":
+            exp_str = self.collected_slots.get("work_experience", "")
+            exp_num = int(exp_str.split()[0]) if exp_str and exp_str.split()[0].isdigit() else 0
+            if exp_str and exp_num < 2:
+                self.tool_infeasible_flag = "insufficient_experience_for_executive_program"
+
+        # g) BFSI: CIBIL below 600
+        if self.template_domain == "bfsi_fintech" and self.collected_slots.get("credit_score_range"):
+            score = int(self.collected_slots["credit_score_range"])
+            if score < 600:
+                self.tool_infeasible_flag = "credit_score_below_minimum"
 
     def _detect_intent_and_drift(self, lower: str) -> None:
         # Check explicit goal switches or primary intents
@@ -563,9 +734,39 @@ class SessionBeliefState:
         if any(kw in lower for kw in booking_keywords):
             if self.template_domain == "clinic_healthcare":
                 self._set_intent("book_clinic_appointment", "caller_requested_clinic_appointment")
+            elif self.template_domain == "education_admissions":
+                self._set_intent("book_counseling_session", "caller_requested_counseling_session")
+            elif self.template_domain == "b2b_saas_sdr":
+                self._set_intent("book_saas_demo", "caller_requested_saas_demo")
+            elif self.template_domain == "bfsi_fintech":
+                self._set_intent("apply_business_loan", "caller_requested_business_loan")
             else:
                 self._set_intent("schedule_site_visit", "caller_requested_site_visit")
             return
+
+        # 4. Education Admissions Specific Intents
+        if self.template_domain == "education_admissions" or any(w in lower for w in ["scholarship", "faculty interview", "admissions counseling"]):
+            if any(w in lower for w in ["scholarship", "fee concession", "financial aid", "discount", "छात्रवृत्ति", "స్కాలర్‌షిప్"]):
+                self._set_intent("apply_scholarship", "caller_requested_scholarship_evaluation")
+                return
+            if any(w in lower for w in ["interview", "counseling", "admissions", "executive ai", "cloud architecture"]):
+                self._set_intent("book_counseling_session", "caller_requested_counseling_session")
+                return
+
+        # 5. BFSI & FinTech Specific Intents
+        if self.template_domain == "bfsi_fintech" or any(w in lower for w in ["business loan", "working capital", "credit limit", "cibil check"]):
+            if any(w in lower for w in ["cibil", "credit check", "eligibility", "score"]):
+                self._set_intent("check_credit_eligibility", "caller_requested_credit_eligibility")
+                return
+            if any(w in lower for w in ["loan", "working capital", "credit line", "funding"]):
+                self._set_intent("apply_business_loan", "caller_requested_business_loan")
+                return
+
+        # 6. B2B SaaS Specific Intents
+        if self.template_domain == "b2b_saas_sdr" or any(w in lower for w in ["saas demo", "product demo", "architecture demo", "live demo"]):
+            if any(w in lower for w in ["demo", "walkthrough", "live preview"]):
+                self._set_intent("book_saas_demo", "caller_requested_saas_demo")
+                return
 
         # 4. EMI Calculation
         if any(w in lower for w in ["calculate emi", "emi calculation", "monthly emi", "how much emi", "किस्त", "ఈఎంఐ", "இஎம்ஐ", "ഇഎംഐ", "ಇಎಂಐ"]):
@@ -638,7 +839,7 @@ class SessionBeliefState:
 
         # Acknowledge collected slots if any exist
         known_parts = []
-        for k in ["bhk_preference", "department", "visit_date", "visit_time", "order_id"]:
+        for k in ["bhk_preference", "department", "visit_date", "visit_time", "order_id", "course_interest", "interview_date", "interview_time", "loan_amount", "annual_turnover", "monthly_volume", "demo_date", "demo_time"]:
             if k in self.collected_slots and k not in self.ambiguous_slots_flagged:
                 known_parts.append(self.collected_slots[k])
         if known_parts:

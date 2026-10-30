@@ -138,6 +138,9 @@ class EdgeTTSProvider(BaseTTSProvider):
         speaking_speed: float = 1.04,
         pitch: str = "+0Hz"
     ) -> bytes:
+        if os.getenv("TESTING", "").lower() in ("1", "true", "yes") or getattr(settings, "DEFAULT_TTS_PROVIDER", "") == "mock":
+            return b"RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00"
+
         if not self.edge_tts:
             return b""
 

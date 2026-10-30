@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.database import get_db
 from app.config import settings
-from app.models import Call, CallSummary, Agent, InboundLead, KnowledgeDoc
+from app.models import Call, CallSummary, Agent, InboundLead, KnowledgeDoc, User
+from app.api.auth import get_current_user, resolve_current_user
 from app.schemas import DashboardKPIs, LanguageDistributionItem, CallOutcomeItem, LatencyMetrics
 from app.voice.call_3i_benchmark import evaluate_call_3i_benchmark, CALL_3I_SCENARIOS
 
@@ -18,15 +19,25 @@ def run_call_3i_benchmark_endpoint(k_trials: int = 1, db: Session = Depends(get_
     return evaluate_call_3i_benchmark(db=db, k_trials=k_trials)
 
 @router.get("/dashboard")
-def get_dashboard_analytics(db: Session = Depends(get_db)):
-    calls = db.query(Call).all()
+def get_dashboard_analytics(
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    user = resolve_current_user(current_user, db)
+    org_filter = [Call.organization_id == user.organization_id] if (user and user.role != "superadmin") else []
+    agent_filter = [Agent.organization_id == user.organization_id] if (user and user.role != "superadmin") else []
+    doc_filter = [KnowledgeDoc.organization_id == user.organization_id] if (user and user.role != "superadmin") else []
+    lead_filter = [InboundLead.organization_id == user.organization_id] if (user and user.role != "superadmin") else []
+
+    calls = db.query(Call).filter(*org_filter).all()
     total = len(calls)
-    leads = db.query(InboundLead).all()
+    leads = db.query(InboundLead).filter(*lead_filter).all()
     avg_speed = round(sum(l.response_time_seconds for l in leads) / len(leads), 1) if leads else 0.0
-    active_agents = db.query(Agent).filter(Agent.is_active == True).count()
+    active_agents = db.query(Agent).filter(Agent.is_active == True, *agent_filter).count()
     approved_docs = db.query(KnowledgeDoc).filter(
         KnowledgeDoc.approval_status == "approved",
-        KnowledgeDoc.is_active == True
+        KnowledgeDoc.is_active == True,
+        *doc_filter
     ).count()
 
     system_health = {
@@ -69,7 +80,10 @@ def get_dashboard_analytics(db: Session = Depends(get_db)):
     total_dur = sum(c.duration_seconds for c in calls)
     total_cost = sum(c.cost_estimate for c in calls)
 
-    summaries = db.query(CallSummary).all()
+    summary_query = db.query(CallSummary).join(Call, CallSummary.call_id == Call.id)
+    if org_filter:
+        summary_query = summary_query.filter(*org_filter)
+    summaries = summary_query.all()
     positive = sum(1 for s in summaries if s.sentiment == "Positive")
     qualified = sum(
         1 for s in summaries
