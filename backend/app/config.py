@@ -225,10 +225,48 @@ class Settings(BaseSettings):
         val = (self.PUBLIC_BASE_URL or self.PUBLIC_WEBHOOK_URL or "").strip().rstrip("/")
         return val
 
+    def is_placeholder_url(self, url: str = None) -> bool:
+        """
+        Checks if a URL is empty, contains template placeholders, or points to local loopback
+        which cannot be reached by external carriers like Twilio.
+        """
+        target = (url if url is not None else self.get_public_base_url()).strip().lower()
+        if not target:
+            return True
+        placeholders = [
+            "your-domain", "your-ngrok", "your-tunnel", "example.com",
+            "placeholder", "localhost", "127.0.0.1", "0.0.0.0", "change-me"
+        ]
+        return any(ph in target for ph in placeholders)
+
+    def validate_public_url(self, url: str = None) -> tuple[bool, str]:
+        """
+        Strict validation of public webhook URL for external telephony carriers (Twilio, Exotel).
+        Returns (is_valid, actionable_diagnostic_message).
+        """
+        target = (url if url is not None else self.get_public_base_url()).strip()
+        if not target:
+            return False, (
+                "Public Webhook URL is not configured. External telephony carriers (Twilio) require a public HTTPS "
+                "endpoint to deliver call webhooks to Stratum AI. Please run an HTTPS tunnel (e.g., `ngrok http 8000`) "
+                "and configure PUBLIC_BASE_URL in Settings or Integrations."
+            )
+        if self.is_placeholder_url(target):
+            return False, (
+                f"Configured Public Webhook URL '{target}' contains a placeholder domain that external carriers cannot reach. "
+                "Please replace it with an active HTTPS tunnel URL (e.g. from ngrok or your cloud domain) in Settings."
+            )
+        if not target.lower().startswith("https://"):
+            return False, (
+                f"Configured Public Webhook URL '{target}' is not secure HTTPS. External carriers require a valid HTTPS URL "
+                "for all voice webhooks and TwiML actions."
+            )
+        return True, "Valid public HTTPS URL ready for telephony carrier webhooks."
+
     def is_public_https(self) -> bool:
-        """Checks if the configured public base URL uses secure HTTPS."""
+        """Checks if the configured public base URL uses secure HTTPS and is not a placeholder."""
         base = self.get_public_base_url()
-        return base.lower().startswith("https://")
+        return base.lower().startswith("https://") and not self.is_placeholder_url(base)
 
     def get_public_http_url(self, path: str, request: Any = None) -> str:
         """

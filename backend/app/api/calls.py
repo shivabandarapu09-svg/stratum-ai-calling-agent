@@ -9,6 +9,7 @@ from app.models import Call, Agent, Customer, CallTranscriptTurn, CallSummary, O
 from app.api.auth import get_current_user, resolve_current_user
 from app.schemas import CallInitiateRequest, CallOut, CallDetailOut
 from app.telephony.web_simulator_provider import get_telephony_provider
+from app.telephony.logging import log_telephony_event
 from app.voice.conversation_engine import VoiceConversationSession
 
 router = APIRouter(prefix="/calls", tags=["Calls"])
@@ -48,36 +49,38 @@ async def initiate_call(
         db.flush()
 
     call_id = str(uuid.uuid4())
-    public_base = settings.get_public_base_url()
 
     # Pre-flight validation for Twilio PSTN calls: prevent placeholder / unreachable tunnels from triggering Twilio "check the URL" errors
-    if req.provider == "twilio" and not req.twilio_trial_mode:
-        if not public_base:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Public Webhook URL is missing. Twilio PSTN requires an active public HTTPS URL "
-                    "(e.g., https://your-id.ngrok-free.app or your production domain) so Twilio can connect "
-                    "the call to Stratum's AI voice engine. Configure PUBLIC_BASE_URL in Settings or Integrations, "
-                    "or check 'Twilio Free-Trial Connectivity Check' for static testing."
-                )
+    if req.provider == "twilio":
+        is_valid, validation_msg = settings.validate_public_url()
+        if not is_valid:
+            log_telephony_event(
+                event_type="validation_error",
+                call_id=call_id,
+                provider="twilio",
+                level="error",
+                details={"reason": validation_msg, "to_phone": req.customer_phone}
             )
-        if any(ph in public_base.lower() for ph in ["your-domain", "example.com", "localhost", "127.0.0.1"]):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"Invalid Public Webhook URL '{public_base}'. This is a placeholder domain that Twilio cannot reach. "
-                    "Please configure your active public HTTPS tunnel URL (e.g. from ngrok or your cloud domain) "
-                    "in Settings or Integrations before initiating real telephone calls."
-                )
+                detail=validation_msg
             )
 
-    status_callback_url = ""
-    if public_base and not req.twilio_trial_mode:
-        callback_url = settings.get_public_http_url(f"/api/telephony/twilio/twiml/{call_id}")
-        status_callback_url = settings.get_public_http_url(f"/api/telephony/twilio/status/{call_id}")
-    else:
-        callback_url = f"/api/telephony/twilio/twiml/{call_id}"
+    callback_url = settings.get_public_http_url(f"/api/telephony/twilio/twiml/{call_id}")
+    status_callback_url = settings.get_public_http_url(f"/api/telephony/twilio/status/{call_id}")
+
+    log_telephony_event(
+        event_type="call_initiated",
+        call_id=call_id,
+        provider=req.provider or "web_simulator",
+        details={
+            "agent_id": agent.id,
+            "agent_name": agent.name,
+            "to_phone": req.customer_phone,
+            "callback_url": callback_url,
+            "status_callback_url": status_callback_url,
+        }
+    )
 
     # Telephony invocation
     provider = get_telephony_provider(req.provider)
@@ -88,12 +91,19 @@ async def initiate_call(
             from_phone=caller_from,
             callback_url=callback_url,
             metadata={
-                "twilio_trial_mode": req.twilio_trial_mode,
                 "status_callback_url": status_callback_url,
                 "call_id": call_id,
             },
         )
     except Exception as e:
+        log_telephony_event(
+            event_type="carrier_error",
+            call_id=call_id,
+            provider=req.provider or "unknown",
+            level="error",
+            error=str(e),
+            details={"to_phone": req.customer_phone}
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Telephony Dialing Error: {str(e)}"

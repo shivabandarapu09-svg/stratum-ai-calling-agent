@@ -395,6 +395,16 @@ export const LiveCallSimulator: React.FC<{ onNavigate?: (tab: string) => void }>
     setCallSummary(null);
     setTransferAlert(null);
     setWhatsAppAlert(null);
+
+    if (callMode === 'real_phone' && !telephonyStatus?.is_valid_public_https) {
+      setDialError(
+        telephonyStatus?.validation_message ||
+        'Public Webhook URL is not configured. External carriers (Twilio) require an active HTTPS tunnel (e.g. `ngrok http 8000`) to connect answered calls to Stratum AI. Please configure PUBLIC_BASE_URL in Settings.'
+      );
+      setLifecycleStep('Failed');
+      return;
+    }
+
     setLifecycleStep('Connecting');
     setCurrentStage('1. Hook & Rapport');
     setBantQualified({ budget: false, authority: true, need: false, timeline: false });
@@ -919,21 +929,24 @@ export const LiveCallSimulator: React.FC<{ onNavigate?: (tab: string) => void }>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500 dark:text-slate-400">Public Webhook URL:</span>
-                  <span className={telephonyStatus?.public_webhook_url ? 'text-emerald-600 dark:text-emerald-400 font-mono text-[11px]' : 'text-amber-600 dark:text-amber-400 text-[11px]'}>
-                    {telephonyStatus?.public_webhook_url || 'Not set (Required for live PSTN AI)'}
+                  <span className={telephonyStatus?.is_valid_public_https ? 'text-emerald-600 dark:text-emerald-400 font-mono text-[11px]' : 'text-amber-600 dark:text-amber-400 font-medium text-[11px]'}>
+                    {telephonyStatus?.public_webhook_url || 'Not configured'}
                   </span>
                 </div>
-                <label className="flex items-center gap-2 pt-1.5 border-t border-slate-200 dark:border-slate-800 cursor-pointer text-slate-700 dark:text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={twilioTrialMode}
-                    onChange={(e) => setTwilioTrialMode(e.target.checked)}
-                    className="rounded accent-indigo-600"
-                  />
-                  <span className="text-[11px]">
-                    Twilio Free-Trial Connectivity Check Only (plays Twilio demo XML; uncheck for live AI conversation)
-                  </span>
-                </label>
+                {!telephonyStatus?.is_valid_public_https && (
+                  <div className="p-2.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-[11px] space-y-1">
+                    <div className="font-semibold flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5" /> Public HTTPS Tunnel Required
+                    </div>
+                    <p className="text-[10px] text-slate-600 dark:text-slate-300">
+                      Twilio dials from the cloud and requires a public HTTPS URL to deliver conversational voice turns to Stratum:
+                    </p>
+                    <div className="font-mono text-[10px] bg-slate-900 text-amber-300 p-1.5 rounded">
+                      1. In PowerShell: <code>ngrok http 8000</code><br/>
+                      2. Paste <code>https://xxxx.ngrok-free.app</code> in <button onClick={() => onNavigate && onNavigate('settings')} className="underline font-bold text-white">Settings</button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -965,11 +978,18 @@ export const LiveCallSimulator: React.FC<{ onNavigate?: (tab: string) => void }>
             {!callActive ? (
               <button
                 onClick={handleStartCall}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 px-4 rounded-lg text-xs flex items-center justify-center gap-2 shadow-sm transition-colors"
+                disabled={callMode === 'real_phone' && !telephonyStatus?.is_valid_public_https}
+                className={`w-full font-semibold py-3 px-4 rounded-lg text-xs flex items-center justify-center gap-2 shadow-sm transition-colors ${
+                  callMode === 'real_phone' && !telephonyStatus?.is_valid_public_https
+                    ? 'bg-slate-300 dark:bg-slate-800 text-slate-500 dark:text-slate-500 cursor-not-allowed'
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                }`}
               >
                 <Phone className="w-4 h-4" />
                 {callMode === 'real_phone'
-                  ? `Place Outbound PSTN Call (${phone})`
+                  ? (telephonyStatus?.is_valid_public_https
+                      ? `Place Outbound PSTN Call (${phone})`
+                      : 'Configure HTTPS Tunnel in Settings to Call')
                   : `Start Simulated Call with ${activeAgent?.name || 'AI Employee'}`}
               </button>
             ) : (

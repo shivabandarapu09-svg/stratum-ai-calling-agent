@@ -36,19 +36,16 @@ class TwilioProvider(TelephonyProvider):
         # Always prioritize the configured Twilio caller number over agent transfer numbers
         caller = self.default_from_phone or from_phone
         meta = metadata or {}
-        trial_mode = bool(meta.get("twilio_trial_mode", False))
+        call_id = meta.get("call_id", "")
         status_callback_url = str(meta.get("status_callback_url", "") or "").strip()
 
-        if trial_mode:
-            target_url = self.TRIAL_DEMO_VOICE_URL
-        elif callback_url and (callback_url.startswith("http://") or callback_url.startswith("https://")):
+        if callback_url and (callback_url.startswith("http://") or callback_url.startswith("https://")):
             target_url = callback_url
         else:
             raise ValueError(
                 "A Public Webhook URL / PUBLIC_BASE_URL (https://...) is required for two-way PSTN AI conversations so Twilio can "
                 "connect answered calls to the Stratum AI voice engine (/api/telephony/twilio/twiml/{call_id}). "
-                "Please configure PUBLIC_BASE_URL or PUBLIC_WEBHOOK_URL in Settings or Integrations (e.g. via ngrok or Cloudflare Tunnel), "
-                "or explicitly select 'Twilio Trial-Compatible Test Call' if you only want to test static trial ringing."
+                "Please configure PUBLIC_BASE_URL in Settings or Integrations (e.g. via ngrok or Cloudflare Tunnel)."
             )
 
         data: Dict[str, Any] = {
@@ -56,7 +53,8 @@ class TwilioProvider(TelephonyProvider):
             "From": caller,
             "Url": target_url,
         }
-        if not trial_mode and status_callback_url.startswith(("http://", "https://")):
+        # Note: StatusCallbackMethod is intentionally omitted to avoid carrier rejection
+        if status_callback_url.startswith(("http://", "https://")):
             data["StatusCallback"] = status_callback_url
 
         async with httpx.AsyncClient(auth=(self.account_sid, self.auth_token)) as client:

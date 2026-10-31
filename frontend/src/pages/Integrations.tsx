@@ -333,10 +333,22 @@ export const Integrations: React.FC = () => {
                         </CardDescription>
                       </div>
                       <Badge 
-                        variant={publicHealth?.status === 'healthy' ? 'success' : (publicHealth?.configured ? 'warning' : 'danger')}
+                        variant={
+                          publicHealth?.status === 'healthy'
+                            ? 'success'
+                            : publicHealth?.status === 'placeholder_url' || publicHealth?.status === 'unreachable_tunnel'
+                            ? 'danger'
+                            : 'warning'
+                        }
                         size="sm"
                       >
-                        {publicHealth?.status === 'healthy' ? 'PSTN Ready' : (publicHealth?.configured ? 'Review Warnings' : 'Missing HTTPS URL')}
+                        {publicHealth?.status === 'healthy'
+                          ? 'PSTN Ready'
+                          : publicHealth?.status === 'placeholder_url'
+                          ? 'Placeholder Domain'
+                          : publicHealth?.status === 'unreachable_tunnel'
+                          ? 'Tunnel Unreachable'
+                          : 'Configure HTTPS Tunnel'}
                       </Badge>
                     </div>
                   </CardHeader>

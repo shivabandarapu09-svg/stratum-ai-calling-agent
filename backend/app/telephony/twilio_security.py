@@ -110,13 +110,46 @@ def redact_telephony_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return redacted
 
 
+async def extract_twilio_request_params(request: Request) -> Dict[str, Any]:
+    """
+    Extracts all parameters sent by Twilio in either form-data, query parameters, or JSON.
+    FastAPI / Starlette safely caches request.form() internally so repeated calls are instantaneous.
+    """
+    params: Dict[str, Any] = {}
+    if request is None:
+        return params
+
+    # Query parameters
+    if hasattr(request, "query_params") and request.query_params:
+        params.update(dict(request.query_params))
+
+    # POST body parameters
+    if request.method in ("POST", "PUT", "PATCH"):
+        content_type = request.headers.get("content-type", "").lower()
+        if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+            try:
+                form = await request.form()
+                params.update({k: str(v) for k, v in form.items()})
+            except Exception:
+                pass
+        elif "application/json" in content_type:
+            try:
+                body = await request.json()
+                if isinstance(body, dict):
+                    params.update({k: str(v) for k, v in body.items()})
+            except Exception:
+                pass
+    return params
+
+
 async def verify_twilio_webhook_request(
     request: Request,
     body_params: Optional[Dict[str, Any]] = None,
     enforce_signature: bool = False
 ) -> Tuple[bool, str]:
     """
-    Verifies the integrity of an incoming Twilio webhook.
+    Verifies the integrity of an incoming Twilio webhook with multi-scheme tunnel support.
+    Automatically extracts POST form parameters so HMAC calculations always match Twilio's standard.
     Returns (is_valid, reason).
     """
     auth_token = settings.TWILIO_AUTH_TOKEN
@@ -133,31 +166,47 @@ async def verify_twilio_webhook_request(
         # Cannot verify without Twilio Auth Token configured
         return True, "Twilio Auth Token not configured, skipping validation"
 
+    if body_params is None:
+        params = await extract_twilio_request_params(request)
+    else:
+        params = body_params
+
     canonical_url = get_effective_twilio_request_url(request)
-    params = body_params or {}
 
-    is_valid = validate_twilio_signature(
-        url=canonical_url,
-        params=params,
-        signature=signature,
-        auth_token=auth_token
+    # Candidate URLs to test against Twilio signature: accounts for reverse proxies, SSL offloading, and ports
+    candidate_urls = [canonical_url]
+    direct_url = str(request.url)
+    if direct_url not in candidate_urls:
+        candidate_urls.append(direct_url)
+
+    # Add https / http scheme variants
+    for u in list(candidate_urls):
+        if u.startswith("http://"):
+            https_u = "https://" + u[7:]
+            if https_u not in candidate_urls:
+                candidate_urls.append(https_u)
+        elif u.startswith("https://"):
+            http_u = "http://" + u[8:]
+            if http_u not in candidate_urls:
+                candidate_urls.append(http_u)
+
+    # Add port-stripped variants (e.g. :443 or :8000)
+    for u in list(candidate_urls):
+        if ":443/" in u:
+            stripped = u.replace(":443/", "/")
+            if stripped not in candidate_urls:
+                candidate_urls.append(stripped)
+        if ":8000/" in u:
+            stripped = u.replace(":8000/", "/")
+            if stripped not in candidate_urls:
+                candidate_urls.append(stripped)
+
+    for candidate in candidate_urls:
+        if validate_twilio_signature(url=candidate, params=params, signature=signature, auth_token=auth_token):
+            return True, f"Signature verified successfully against {candidate}"
+
+    logger.warning(
+        f"Twilio signature validation failed. Checked {len(candidate_urls)} candidate URLs for signature '{signature[:8]}...'. "
+        f"Param keys: {list(params.keys())}"
     )
-
-    if not is_valid:
-        # Also try request.url directly in case Twilio reached it without proxy rewrite
-        direct_url = str(request.url)
-        if direct_url != canonical_url:
-            is_valid = validate_twilio_signature(
-                url=direct_url,
-                params=params,
-                signature=signature,
-                auth_token=auth_token
-            )
-
-    if not is_valid:
-        logger.warning(
-            f"Twilio signature validation failed for URL: {canonical_url} (params count: {len(params)})"
-        )
-        return False, f"Twilio signature verification failed for {canonical_url}"
-
-    return True, "Signature verified successfully"
+    return False, f"Twilio signature verification failed for {canonical_url}"

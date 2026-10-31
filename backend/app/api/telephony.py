@@ -15,6 +15,14 @@ from app.voice.conversation_engine import VoiceConversationSession
 from app.ai.tts_providers import clean_text_for_speech
 from app.telephony.twilio_provider import TwilioProvider
 from app.telephony.exotel_provider import ExotelProvider
+from app.telephony.logging import log_telephony_event
+from app.telephony.twilio_security import (
+    validate_twilio_signature,
+    compute_twilio_signature,
+    verify_twilio_webhook_request,
+    extract_twilio_request_params,
+    redact_telephony_payload,
+)
 
 router = APIRouter(prefix="/telephony", tags=["Telephony"])
 
@@ -48,13 +56,6 @@ def _persist_env_vars(updates: dict):
         except Exception:
             pass
 
-from app.telephony.twilio_security import (
-    validate_twilio_signature,
-    compute_twilio_signature,
-    verify_twilio_webhook_request,
-    redact_telephony_payload,
-)
-
 class TelephonyConfigRequest(BaseModel):
     provider: str = "web_simulator" # web_simulator, twilio, exotel
     twilio_account_sid: Optional[str] = None
@@ -75,6 +76,8 @@ class TestConnectionRequest(BaseModel):
 def get_telephony_status():
     twilio = TwilioProvider()
     public_base = settings.get_public_base_url()
+    is_placeholder = settings.is_placeholder_url(public_base)
+    is_valid_https, validation_msg = settings.validate_public_url(public_base)
     return {
         "active_provider": settings.TELEPHONY_PROVIDER,
         "twilio_configured": twilio.is_configured(),
@@ -84,6 +87,9 @@ def get_telephony_status():
         "public_webhook_url": public_base,
         "public_base_url": public_base,
         "public_is_https": settings.is_public_https(),
+        "is_placeholder": is_placeholder,
+        "is_valid_public_https": is_valid_https,
+        "validation_message": validation_msg,
         "public_ws_url_sample": settings.get_public_ws_url("/ws/voice/{call_id}"),
         "exotel_configured": bool(settings.EXOTEL_API_KEY and settings.EXOTEL_SUBDOMAIN),
         "exotel_subdomain": settings.EXOTEL_SUBDOMAIN or "",
@@ -309,10 +315,29 @@ async def twilio_twiml_endpoint(
       Streams studio-quality neural audio via `<Play>` with instant fallback to Polly Neural.
     - Optional `mode="stream"`: Plays greeting and opens bidirectional `<Connect><Stream>` WebSocket.
     """
+    log_telephony_event(
+        event_type="twiml_requested",
+        call_id=call_id,
+        provider="twilio",
+        details={
+            "mode": mode,
+            "method": request.method if request else "UNKNOWN",
+            "url": str(request.url) if request else "",
+            "signature_present": bool(request and request.headers.get("x-twilio-signature")),
+        }
+    )
+
     # Validate carrier webhook signature if X-Twilio-Signature header is provided
     if request is not None and request.headers.get("x-twilio-signature") and settings.TWILIO_AUTH_TOKEN:
         valid, reason = await verify_twilio_webhook_request(request, enforce_signature=True)
         if not valid:
+            log_telephony_event(
+                event_type="carrier_signature_rejected",
+                call_id=call_id,
+                provider="twilio",
+                level="warning",
+                details={"reason": reason, "url": str(request.url)}
+            )
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Carrier signature rejected: {reason}")
 
     call = db.query(Call).filter(Call.id == call_id).first()
@@ -372,7 +397,7 @@ async def twilio_twiml_endpoint(
     return Response(content=twiml, media_type="application/xml")
 
 
-@router.post("/twilio/gather/{call_id}")
+@router.api_route("/twilio/gather/{call_id}", methods=["GET", "POST"])
 async def twilio_gather_turn_endpoint(
     call_id: str,
     request: Request,
@@ -386,19 +411,49 @@ async def twilio_gather_turn_endpoint(
     """
     speech_result = ""
     content_type = request.headers.get("content-type", "")
+    params_dict = {}
+
+    if hasattr(request, "query_params") and request.query_params:
+        params_dict.update(dict(request.query_params))
+
     if "application/json" in content_type:
-        body = await request.json()
-        speech_result = str(body.get("SpeechResult") or body.get("speech_result") or "").strip()
-    else:
-        form_data = await request.form()
-        speech_result = str(form_data.get("SpeechResult") or "").strip()
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                params_dict.update(body)
+                speech_result = str(body.get("SpeechResult") or body.get("speech_result") or "").strip()
+        except Exception:
+            pass
+    elif request.method == "POST":
+        try:
+            form_data = await request.form()
+            params_dict.update({k: str(v) for k, v in form_data.items()})
+            speech_result = str(form_data.get("SpeechResult") or "").strip()
+        except Exception:
+            pass
+
+    if not speech_result and "SpeechResult" in params_dict:
+        speech_result = str(params_dict["SpeechResult"]).strip()
 
     # Validate carrier signature if X-Twilio-Signature header is provided
     if request is not None and request.headers.get("x-twilio-signature") and settings.TWILIO_AUTH_TOKEN:
-        params_dict = dict(form_data) if 'form_data' in locals() else (body if isinstance(body, dict) else {})
         valid, reason = await verify_twilio_webhook_request(request, body_params=params_dict, enforce_signature=True)
         if not valid:
+            log_telephony_event(
+                event_type="carrier_signature_rejected",
+                call_id=call_id,
+                provider="twilio",
+                level="warning",
+                details={"reason": reason, "endpoint": "gather"}
+            )
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Carrier signature rejected: {reason}")
+
+    log_telephony_event(
+        event_type="speech_recognized",
+        call_id=call_id,
+        provider="twilio",
+        details={"speech_result": speech_result, "has_audio_input": bool(speech_result)}
+    )
 
     if not speech_result:
         reprompt_url = settings.get_public_http_url(f"/api/telephony/twilio/reprompt/{call_id}?attempt=1", request)
@@ -416,6 +471,19 @@ async def twilio_gather_turn_endpoint(
         audio_bytes = result.get("audio_bytes")
         twiml_voice, bcp47 = _twiml_voice_and_lang(lang)
         escaped_reply = _xml_escape_speech(ai_text)
+
+        log_telephony_event(
+            event_type="ai_turn_generated",
+            call_id=call_id,
+            provider="twilio",
+            details={
+                "ai_text": ai_text,
+                "language": lang,
+                "is_transfer": bool(result.get("is_transfer")),
+                "should_end_call": bool(result.get("should_end_call")),
+                "metrics": result.get("metrics")
+            }
+        )
 
         if result.get("is_transfer"):
             transfer_num = result.get("transfer_number") or session.agent.transfer_number or "+919876543210"
@@ -449,6 +517,13 @@ async def twilio_gather_turn_endpoint(
         return Response(content=twiml, media_type="application/xml")
 
     except Exception as exc:
+        log_telephony_event(
+            event_type="turn_processing_error",
+            call_id=call_id,
+            provider="twilio",
+            level="error",
+            error=str(exc)
+        )
         # Graceful recovery message on AI/runtime error — never leave dead air or drop without notice
         gather_url = settings.get_public_http_url(f"/api/telephony/twilio/gather/{call_id}", request)
         recovery_msg = "I apologize, I experienced a brief audio delay. Could you please repeat your question?"
@@ -463,7 +538,7 @@ async def twilio_gather_turn_endpoint(
         return Response(content=twiml, media_type="application/xml")
 
 
-@router.post("/twilio/reprompt/{call_id}")
+@router.api_route("/twilio/reprompt/{call_id}", methods=["GET", "POST"])
 async def twilio_reprompt_endpoint(
     call_id: str,
     request: Request = None,
@@ -474,10 +549,29 @@ async def twilio_reprompt_endpoint(
     Keeps the call alive if the customer paused after the greeting or previous response,
     prompting up to 2 times before ending cleanly.
     """
+    log_telephony_event(
+        event_type="reprompt_triggered",
+        call_id=call_id,
+        provider="twilio",
+        details={
+            "attempt": attempt,
+            "method": request.method if request else "UNKNOWN",
+            "url": str(request.url) if request else "",
+            "signature_present": bool(request and request.headers.get("x-twilio-signature")),
+        }
+    )
+
     # Validate carrier webhook signature if X-Twilio-Signature header is provided
     if request is not None and request.headers.get("x-twilio-signature") and settings.TWILIO_AUTH_TOKEN:
         valid, reason = await verify_twilio_webhook_request(request, enforce_signature=True)
         if not valid:
+            log_telephony_event(
+                event_type="carrier_signature_rejected",
+                call_id=call_id,
+                provider="twilio",
+                level="warning",
+                details={"reason": reason, "endpoint": "reprompt"}
+            )
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Carrier signature rejected: {reason}")
 
     call = db.query(Call).filter(Call.id == call_id).first()
@@ -526,7 +620,7 @@ async def twilio_reprompt_endpoint(
     return Response(content=twiml, media_type="application/xml")
 
 
-@router.post("/twilio/status/{call_id}")
+@router.api_route("/twilio/status/{call_id}", methods=["GET", "POST"])
 async def twilio_status_callback(
     call_id: str,
     request: Request,
@@ -537,16 +631,35 @@ async def twilio_status_callback(
     ringing, answered, in_progress, completed, busy, no-answer, failed.
     """
     content_type = request.headers.get("content-type", "")
+    payload: Dict[str, Any] = {}
+    if hasattr(request, "query_params") and request.query_params:
+        payload.update(dict(request.query_params))
+
     if "application/json" in content_type:
-        payload = await request.json()
-    else:
-        form_data = await request.form()
-        payload = dict(form_data)
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                payload.update(body)
+        except Exception:
+            pass
+    elif request.method == "POST":
+        try:
+            form_data = await request.form()
+            payload.update(dict(form_data))
+        except Exception:
+            pass
 
     # Validate carrier signature if X-Twilio-Signature header is provided
     if request is not None and request.headers.get("x-twilio-signature") and settings.TWILIO_AUTH_TOKEN:
         valid, reason = await verify_twilio_webhook_request(request, body_params=payload, enforce_signature=True)
         if not valid:
+            log_telephony_event(
+                event_type="carrier_signature_rejected",
+                call_id=call_id,
+                provider="twilio",
+                level="warning",
+                details={"reason": reason, "endpoint": "status"}
+            )
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Carrier signature rejected: {reason}")
 
     raw_status = str(payload.get("CallStatus") or payload.get("call_status") or "").lower().strip()
@@ -571,6 +684,17 @@ async def twilio_status_callback(
         "canceled": "failed",
     }
     mapped_status = status_map.get(raw_status, call.status)
+
+    log_telephony_event(
+        event_type="status_callback_received",
+        call_id=call_id,
+        provider="twilio",
+        details={
+            "raw_status": raw_status,
+            "mapped_status": mapped_status,
+            "duration": call_duration,
+        }
+    )
 
     if mapped_status in ("completed", "busy", "no-answer", "failed"):
         try:
@@ -646,6 +770,7 @@ async def telephony_public_connectivity_health(
     """
     twilio = TwilioProvider()
     public_base = settings.get_public_base_url()
+    is_placeholder = settings.is_placeholder_url(public_base)
     is_https = settings.is_public_https()
     stream_sample = settings.get_public_ws_url("/ws/voice/{call_id}")
     is_wss = stream_sample.lower().startswith("wss://")
@@ -654,14 +779,19 @@ async def telephony_public_connectivity_health(
     if not public_base:
         diagnostics.append(
             "Missing PUBLIC_BASE_URL: Twilio PSTN requires a publicly accessible HTTPS domain "
-            "(e.g., via ngrok, Cloudflare Tunnel, or production domain) to connect answered calls to the AI engine."
+            "(e.g., via ngrok or Cloudflare Tunnel) to connect answered calls to the Stratum AI voice engine."
+        )
+    elif is_placeholder:
+        diagnostics.append(
+            f"Placeholder domain detected ('{public_base}'): External telephony carriers cannot reach placeholder URLs. "
+            "Please start an active tunnel (`ngrok http 8000`) and paste your live HTTPS URL into Settings."
         )
     elif not is_https:
         diagnostics.append(
-            f"Insecure scheme ({public_base}): Twilio requires HTTPS for production webhooks and WSS for Media Streams."
+            f"Insecure scheme ({public_base}): Twilio requires HTTPS for voice webhooks and WSS for Media Streams."
         )
     else:
-        diagnostics.append("Public base URL is configured with HTTPS.")
+        diagnostics.append("Public base URL is configured with valid HTTPS.")
 
     if is_wss:
         diagnostics.append("Media stream WebSocket endpoint is configured with secure WSS protocol.")
@@ -674,7 +804,7 @@ async def telephony_public_connectivity_health(
         diagnostics.append("Twilio carrier credentials configured.")
 
     probe_result = None
-    if probe and public_base:
+    if probe and public_base and not is_placeholder:
         probe_target = f"{public_base}/api/telephony/health/ping"
         t0 = time.time()
         try:
@@ -696,9 +826,18 @@ async def telephony_public_connectivity_health(
                 "error": str(exc),
             }
 
-    overall_status = "healthy" if (public_base and is_https and twilio.is_configured()) else (
-        "warning" if public_base else "missing_public_url"
-    )
+    if not public_base:
+        overall_status = "missing_public_url"
+    elif is_placeholder:
+        overall_status = "placeholder_url"
+    elif not is_https:
+        overall_status = "insecure_http"
+    elif not twilio.is_configured():
+        overall_status = "missing_credentials"
+    elif probe and probe_result and not probe_result.get("reachable"):
+        overall_status = "unreachable_tunnel"
+    else:
+        overall_status = "healthy"
 
     return {
         "status": overall_status,
