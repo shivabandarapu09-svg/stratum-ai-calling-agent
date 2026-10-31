@@ -133,23 +133,27 @@ def test_placeholder_url_detection():
 
 def test_validate_public_url_messages():
     # Empty
-    valid, msg = settings.validate_public_url("")
+    valid, code, msg = settings.validate_public_url("")
     assert not valid
+    assert code == "ERR_PUBLIC_URL_MISSING"
     assert "not configured" in msg
 
     # Placeholder
-    valid, msg = settings.validate_public_url("https://your-domain.ngrok-free.app")
+    valid, code, msg = settings.validate_public_url("https://your-domain.ngrok-free.app")
     assert not valid
+    assert code == "ERR_PUBLIC_URL_PLACEHOLDER"
     assert "placeholder" in msg
 
     # Non-HTTPS
-    valid, msg = settings.validate_public_url("http://active-tunnel.ngrok-free.app")
+    valid, code, msg = settings.validate_public_url("http://active-tunnel.ngrok-free.app")
     assert not valid
+    assert code == "ERR_PUBLIC_URL_NOT_HTTPS"
     assert "HTTPS" in msg
 
     # Valid
-    valid, msg = settings.validate_public_url("https://active-tunnel.ngrok-free.app")
+    valid, code, msg = settings.validate_public_url("https://active-tunnel.ngrok-free.app")
     assert valid
+    assert code == "OK"
     assert "ready" in msg.lower()
 
 
@@ -294,3 +298,133 @@ def test_redact_telephony_payload():
     assert redacted["to"] == "+91***10"
     assert redacted["CallSid"] == "CA12345678"
     assert redacted["message"] == "Hello from Stratum"
+
+
+# =====================================================================
+# 5. ADVANCED WEBHOOK SIGNATURE & SECURITY SCENARIOS
+# =====================================================================
+
+def test_signature_with_repeated_form_keys():
+    """1. Valid signed POST request with multiple repeated form keys."""
+    url = "https://active-tunnel.ngrok-free.app/api/telephony/twilio/gather/call-123"
+    auth_token = "dummy_auth_token_for_hmac"
+    # Repeated keys like tags or multi-value parameters
+    params = {"tag": ["alpha", "beta"], "CallSid": "CA12345"}
+    sig = compute_twilio_signature(url, params, auth_token)
+    assert bool(sig)
+    assert validate_twilio_signature(url, params, sig, auth_token) is True
+    # Order independence in set representation
+    assert validate_twilio_signature(url, {"tag": ["beta", "alpha"], "CallSid": "CA12345"}, sig, auth_token) is True
+    assert validate_twilio_signature(url, {"tag": ["alpha"], "CallSid": "CA12345"}, sig, auth_token) is False
+
+
+def test_invalid_signature_rejection_http_403(sample_call):
+    """2. Invalid signature rejection (assert HTTP 403)."""
+    old_token = settings.TWILIO_AUTH_TOKEN
+    try:
+        settings.TWILIO_AUTH_TOKEN = "valid_token_12345"
+        headers = {"x-twilio-signature": "bogus_forged_signature_xyz"}
+        resp = client.post(
+            f"/api/telephony/twilio/gather/{sample_call.id}",
+            data={"SpeechResult": "Hello", "CallSid": "CA123"},
+            headers=headers
+        )
+        assert resp.status_code == 403
+        assert "Carrier signature rejected" in resp.json()["detail"]
+    finally:
+        settings.TWILIO_AUTH_TOKEN = old_token
+
+
+def test_missing_signature_rejection_production_vs_dev(sample_call):
+    """3. Missing signature rejection in production vs dev."""
+    old_env = settings.APP_ENV
+    old_token = settings.TWILIO_AUTH_TOKEN
+    try:
+        settings.TWILIO_AUTH_TOKEN = "token_prod_123"
+        # In production, missing signature must be rejected with 403
+        settings.APP_ENV = "production"
+        resp_prod = client.post(
+            f"/api/telephony/twilio/gather/{sample_call.id}",
+            data={"SpeechResult": "Hello", "CallSid": "CA123"}
+        )
+        assert resp_prod.status_code == 403
+        assert "Missing X-Twilio-Signature" in resp_prod.json()["detail"]
+
+        # In dev mode, missing signature is permitted for local development
+        settings.APP_ENV = "development"
+        resp_dev = client.post(
+            f"/api/telephony/twilio/gather/{sample_call.id}",
+            data={"SpeechResult": "Hello", "CallSid": "CA123"}
+        )
+        assert resp_dev.status_code == 200
+    finally:
+        settings.APP_ENV = old_env
+        settings.TWILIO_AUTH_TOKEN = old_token
+
+
+def test_incorrect_url_fails_signature_validation():
+    """4. Incorrect URL used for validation."""
+    correct_url = "https://active-tunnel.ngrok-free.app/api/telephony/twilio/twiml/call-1"
+    wrong_url = "https://different-host.ngrok-free.app/api/telephony/twilio/twiml/call-1"
+    auth_token = "secret_key"
+    params = {"CallSid": "CA111"}
+
+    sig = compute_twilio_signature(correct_url, params, auth_token)
+    # Validation against wrong URL must return False
+    assert validate_twilio_signature(wrong_url, params, sig, auth_token) is False
+
+
+def test_get_request_webhook_signature_verification():
+    """6. GET request webhook signature verification (URL-only signing)."""
+    url_with_query = "https://active-tunnel.ngrok-free.app/api/telephony/twilio/reprompt/call-123?attempt=1"
+    auth_token = "auth_tok_get_check"
+
+    # For GET, parameters dictionary is empty
+    sig = compute_twilio_signature(url_with_query, {}, auth_token)
+    assert bool(sig)
+    assert validate_twilio_signature(url_with_query, {}, sig, auth_token) is True
+    # Different query param in URL changes signature
+    assert validate_twilio_signature(url_with_query.replace("attempt=1", "attempt=2"), {}, sig, auth_token) is False
+
+
+@pytest.mark.asyncio
+async def test_proxy_tunnel_candidate_matching():
+    """7. Reverse proxy and tunnel candidate URL matching."""
+    from starlette.requests import Request
+    from app.telephony.twilio_security import verify_twilio_webhook_request
+
+    old_base = settings.PUBLIC_BASE_URL
+    old_token = settings.TWILIO_AUTH_TOKEN
+    try:
+        settings.PUBLIC_BASE_URL = "https://tunnel.ngrok-free.app"
+        settings.TWILIO_AUTH_TOKEN = "tunnel_token_abc"
+
+        # Simulate incoming request forwarded by ngrok (terminates SSL, forwards HTTP to port 8000)
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/telephony/twilio/gather/call-99",
+            "headers": [
+                (b"host", b"localhost:8000"),
+                (b"x-forwarded-proto", b"https"),
+                (b"x-forwarded-host", b"tunnel.ngrok-free.app"),
+                (b"content-type", b"application/x-www-form-urlencoded"),
+            ],
+            "query_string": b"",
+        }
+
+        # Twilio signed the public HTTPS URL without the internal :8000 port
+        public_url = "https://tunnel.ngrok-free.app/api/telephony/twilio/gather/call-99"
+        params = {"CallSid": "CA999", "SpeechResult": "Namaste"}
+        sig = compute_twilio_signature(public_url, params, settings.TWILIO_AUTH_TOKEN)
+
+        # Attach signature header
+        scope["headers"].append((b"x-twilio-signature", sig.encode("utf-8")))
+        req_with_sig = Request(scope)
+
+        valid, reason = await verify_twilio_webhook_request(req_with_sig, body_params=params)
+        assert valid is True
+        assert "Signature verified successfully" in reason
+    finally:
+        settings.PUBLIC_BASE_URL = old_base
+        settings.TWILIO_AUTH_TOKEN = old_token

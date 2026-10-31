@@ -329,7 +329,10 @@ export async function fetchTelephonyHealthPublic(probe = false): Promise<{
   configured: boolean;
   public_base_url: string;
   is_https: boolean;
+  is_placeholder?: boolean;
   media_stream_is_wss: boolean;
+  backend_port?: number;
+  tunnel_guidance?: string;
   endpoints: {
     twiml_url_template: string;
     gather_url_template: string;
@@ -352,6 +355,13 @@ export async function fetchTelephonyHealthPublic(probe = false): Promise<{
     response?: any;
     error?: string;
   } | null;
+  last_webhook_check?: {
+    timestamp: string | null;
+    success: boolean | null;
+    status_code?: number | null;
+    latency_ms?: number | null;
+    error?: string | null;
+  };
   diagnostics: string[];
 }> {
   const res = await fetch(`${API_BASE}/telephony/health/public?probe=${probe}`);

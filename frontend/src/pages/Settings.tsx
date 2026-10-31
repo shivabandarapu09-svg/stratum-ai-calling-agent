@@ -3,7 +3,7 @@ import {
   Key, Phone, ShieldCheck, Save, Check, MessageSquare, Zap, Globe,
   AlertCircle, CheckCircle2, Eye, EyeOff, ExternalLink, RefreshCw, Server, Cpu, Link2
 } from 'lucide-react';
-import { fetchTelephonyStatus, updateTelephonyConfig, testTwilioConnection } from '../api';
+import { fetchTelephonyStatus, updateTelephonyConfig, testTwilioConnection, fetchTelephonyHealthPublic } from '../api';
 import { 
   Button, Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter,
   Badge, Input, Select, LoadingState, ErrorState 
@@ -46,6 +46,42 @@ export const Settings: React.FC = () => {
     account_status?: string;
     account_type?: string;
   } | null>(null);
+
+  const [testingReachability, setTestingReachability] = useState(false);
+  const [reachabilityResult, setReachabilityResult] = useState<{
+    success: boolean;
+    message: string;
+    latency_ms?: number;
+  } | null>(null);
+
+  const handleTestReachability = async () => {
+    setTestingReachability(true);
+    setReachabilityResult(null);
+    try {
+      const data = await fetchTelephonyHealthPublic(true);
+      if (data.status === 'healthy') {
+        const lat = data.reachability_probe?.latency_ms ? ` (${data.reachability_probe.latency_ms} ms)` : '';
+        setReachabilityResult({
+          success: true,
+          message: `Public HTTPS Webhook is reachable by external carriers!${lat}`,
+          latency_ms: data.reachability_probe?.latency_ms
+        });
+      } else {
+        const detail = data.diagnostics?.[0] || data.reachability_probe?.error || 'Endpoint unreachable';
+        setReachabilityResult({
+          success: false,
+          message: detail
+        });
+      }
+    } catch (e: any) {
+      setReachabilityResult({
+        success: false,
+        message: e.message || 'Failed to reach public connectivity diagnostic service.'
+      });
+    } finally {
+      setTestingReachability(false);
+    }
+  };
 
   useEffect(() => {
     loadSettings();
@@ -357,19 +393,33 @@ export const Settings: React.FC = () => {
               </div>
             </div>
 
-            {/* Test Connection Button & Diagnostic Output */}
-            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleTestTwilio}
-                disabled={testingConnection || (!twilioAccountSid && !twilioMaskedSid)}
-                isLoading={testingConnection}
-                leftIcon={<Zap className="w-3.5 h-3.5 text-indigo-500" />}
-              >
-                Test Twilio Connection
-              </Button>
+            {/* Test Connection & Reachability Buttons & Diagnostic Output */}
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleTestTwilio}
+                  disabled={testingConnection || (!twilioAccountSid && !twilioMaskedSid)}
+                  isLoading={testingConnection}
+                  leftIcon={<Zap className="w-3.5 h-3.5 text-indigo-500" />}
+                >
+                  Test Twilio Credentials
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleTestReachability}
+                  disabled={testingReachability || !publicWebhookUrl}
+                  isLoading={testingReachability}
+                  leftIcon={<RefreshCw className="w-3.5 h-3.5 text-emerald-500" />}
+                >
+                  Test Webhook Reachability
+                </Button>
+              </div>
 
               {testResult && (
                 <div className={`p-2.5 rounded-lg text-[11px] font-medium flex items-center gap-2 border ${
@@ -382,7 +432,22 @@ export const Settings: React.FC = () => {
                   ) : (
                     <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
                   )}
-                  <span>{testResult.message}</span>
+                  <span>Twilio Auth: {testResult.message}</span>
+                </div>
+              )}
+
+              {reachabilityResult && (
+                <div className={`p-2.5 rounded-lg text-[11px] font-medium flex items-center gap-2 border ${
+                  reachabilityResult.success
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-700/50'
+                    : 'bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border-rose-200 dark:border-rose-700/50'
+                }`}>
+                  {reachabilityResult.success ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                  )}
+                  <span>Webhook Reachability: {reachabilityResult.message}</span>
                 </div>
               )}
             </div>

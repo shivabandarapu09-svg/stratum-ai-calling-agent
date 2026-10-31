@@ -77,7 +77,7 @@ def get_telephony_status():
     twilio = TwilioProvider()
     public_base = settings.get_public_base_url()
     is_placeholder = settings.is_placeholder_url(public_base)
-    is_valid_https, validation_msg = settings.validate_public_url(public_base)
+    is_valid_https, validation_code, validation_msg = settings.validate_public_url(public_base)
     return {
         "active_provider": settings.TELEPHONY_PROVIDER,
         "twilio_configured": twilio.is_configured(),
@@ -89,6 +89,7 @@ def get_telephony_status():
         "public_is_https": settings.is_public_https(),
         "is_placeholder": is_placeholder,
         "is_valid_public_https": is_valid_https,
+        "error_code": validation_code,
         "validation_message": validation_msg,
         "public_ws_url_sample": settings.get_public_ws_url("/ws/voice/{call_id}"),
         "exotel_configured": bool(settings.EXOTEL_API_KEY and settings.EXOTEL_SUBDOMAIN),
@@ -327,9 +328,10 @@ async def twilio_twiml_endpoint(
         }
     )
 
-    # Validate carrier webhook signature if X-Twilio-Signature header is provided
-    if request is not None and request.headers.get("x-twilio-signature") and settings.TWILIO_AUTH_TOKEN:
-        valid, reason = await verify_twilio_webhook_request(request, enforce_signature=True)
+    # Validate carrier webhook signature: enforce in production or whenever signature header is sent
+    is_production = getattr(settings, "APP_ENV", "development") == "production"
+    if is_production or (request is not None and request.headers.get("x-twilio-signature")):
+        valid, reason = await verify_twilio_webhook_request(request, enforce_signature=is_production)
         if not valid:
             log_telephony_event(
                 event_type="carrier_signature_rejected",
@@ -346,7 +348,7 @@ async def twilio_twiml_endpoint(
             '<?xml version="1.0" encoding="UTF-8"?>'
             "<Response><Say voice=\"Polly.Kajal-Neural\" language=\"en-IN\">We could not locate this call session. Goodbye.</Say><Hangup/></Response>"
         )
-        return Response(content=fallback_xml, media_type="application/xml")
+        return Response(content=fallback_xml, media_type="application/xml; charset=utf-8")
 
     if call.status in ("ringing", "queued", "initiated"):
         call.status = "in_progress"
@@ -366,7 +368,14 @@ async def twilio_twiml_endpoint(
         <Stream url="{ws_url}" />
     </Connect>
 </Response>"""
-        return Response(content=twiml, media_type="application/xml")
+        log_telephony_event(
+            event_type="twiml_generated",
+            call_id=call_id,
+            provider="twilio",
+            tenant_id=call.organization_id if call else None,
+            details={"mode": "stream", "language": lang, "voice": twiml_voice}
+        )
+        return Response(content=twiml, media_type="application/xml; charset=utf-8")
 
     # Synthesize neural greeting audio for studio-quality human voice
     speed = getattr(session.agent, "speaking_speed", 1.04) or 1.04
@@ -394,7 +403,19 @@ async def twilio_twiml_endpoint(
         lang=lang,
         request=request,
     )
-    return Response(content=twiml, media_type="application/xml")
+    log_telephony_event(
+        event_type="twiml_generated",
+        call_id=call_id,
+        provider="twilio",
+        tenant_id=call.organization_id if call else None,
+        details={
+            "mode": mode,
+            "language": lang,
+            "has_neural_audio": bool(greeting_audio),
+            "voice": twiml_voice,
+        }
+    )
+    return Response(content=twiml, media_type="application/xml; charset=utf-8")
 
 
 @router.api_route("/twilio/gather/{call_id}", methods=["GET", "POST"])
@@ -435,9 +456,10 @@ async def twilio_gather_turn_endpoint(
     if not speech_result and "SpeechResult" in params_dict:
         speech_result = str(params_dict["SpeechResult"]).strip()
 
-    # Validate carrier signature if X-Twilio-Signature header is provided
-    if request is not None and request.headers.get("x-twilio-signature") and settings.TWILIO_AUTH_TOKEN:
-        valid, reason = await verify_twilio_webhook_request(request, body_params=params_dict, enforce_signature=True)
+    # Validate carrier signature: enforce in production or whenever signature header is sent
+    is_production = getattr(settings, "APP_ENV", "development") == "production"
+    if is_production or (request is not None and request.headers.get("x-twilio-signature")):
+        valid, reason = await verify_twilio_webhook_request(request, body_params=params_dict, enforce_signature=is_production)
         if not valid:
             log_telephony_event(
                 event_type="carrier_signature_rejected",
@@ -461,7 +483,7 @@ async def twilio_gather_turn_endpoint(
 <Response>
     <Redirect method="POST">{reprompt_url}</Redirect>
 </Response>"""
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="application/xml; charset=utf-8")
 
     try:
         session = VoiceConversationSession(call_id=call_id, db=db)
@@ -492,7 +514,7 @@ async def twilio_gather_turn_endpoint(
     <Say voice="{twiml_voice}" language="{bcp47}">{escaped_reply}</Say>
     <Dial>{html.escape(transfer_num, quote=True)}</Dial>
 </Response>"""
-            return Response(content=twiml, media_type="application/xml")
+            return Response(content=twiml, media_type="application/xml; charset=utf-8")
 
         if result.get("should_end_call"):
             session.complete_call(final_status="completed")
@@ -501,7 +523,7 @@ async def twilio_gather_turn_endpoint(
     <Say voice="{twiml_voice}" language="{bcp47}">{escaped_reply}</Say>
     <Hangup/>
 </Response>"""
-            return Response(content=twiml, media_type="application/xml")
+            return Response(content=twiml, media_type="application/xml; charset=utf-8")
 
         gather_url = settings.get_public_http_url(f"/api/telephony/twilio/gather/{call_id}", request)
         reprompt_url = settings.get_public_http_url(f"/api/telephony/twilio/reprompt/{call_id}?attempt=1", request)
@@ -514,7 +536,7 @@ async def twilio_gather_turn_endpoint(
             lang=lang,
             request=request,
         )
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="application/xml; charset=utf-8")
 
     except Exception as exc:
         log_telephony_event(
@@ -535,7 +557,7 @@ async def twilio_gather_turn_endpoint(
     <Say voice="Polly.Kajal-Neural" language="en-IN">Thank you for your time. We will follow up with you shortly. Goodbye.</Say>
     <Hangup/>
 </Response>"""
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=twiml, media_type="application/xml; charset=utf-8")
 
 
 @router.api_route("/twilio/reprompt/{call_id}", methods=["GET", "POST"])
@@ -561,9 +583,10 @@ async def twilio_reprompt_endpoint(
         }
     )
 
-    # Validate carrier webhook signature if X-Twilio-Signature header is provided
-    if request is not None and request.headers.get("x-twilio-signature") and settings.TWILIO_AUTH_TOKEN:
-        valid, reason = await verify_twilio_webhook_request(request, enforce_signature=True)
+    # Validate carrier webhook signature: enforce in production or whenever signature header is sent
+    is_production = getattr(settings, "APP_ENV", "development") == "production"
+    if is_production or (request is not None and request.headers.get("x-twilio-signature")):
+        valid, reason = await verify_twilio_webhook_request(request, enforce_signature=is_production)
         if not valid:
             log_telephony_event(
                 event_type="carrier_signature_rejected",
@@ -578,7 +601,7 @@ async def twilio_reprompt_endpoint(
     if not call:
         return Response(
             content='<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
-            media_type="application/xml",
+            media_type="application/xml; charset=utf-8",
         )
 
     session = VoiceConversationSession(call_id=call_id, db=db)
@@ -607,7 +630,14 @@ async def twilio_reprompt_endpoint(
     </Gather>
     <Redirect method="POST">{next_reprompt}</Redirect>
 </Response>"""
-        return Response(content=twiml, media_type="application/xml")
+        log_telephony_event(
+            event_type="reprompt_generated",
+            call_id=call_id,
+            provider="twilio",
+            tenant_id=call.organization_id if call else None,
+            details={"attempt": attempt, "language": lang, "action": "gather"}
+        )
+        return Response(content=twiml, media_type="application/xml; charset=utf-8")
 
     # After 2 unanswered reprompts, close the call politely and generate summary
     session.complete_call(final_status="completed")
@@ -617,7 +647,14 @@ async def twilio_reprompt_endpoint(
     <Say voice="{twiml_voice}" language="{bcp47}">{_xml_escape_speech(closing)}</Say>
     <Hangup/>
 </Response>"""
-    return Response(content=twiml, media_type="application/xml")
+    log_telephony_event(
+        event_type="reprompt_generated",
+        call_id=call_id,
+        provider="twilio",
+        tenant_id=call.organization_id if call else None,
+        details={"attempt": attempt, "language": lang, "action": "hangup"}
+    )
+    return Response(content=twiml, media_type="application/xml; charset=utf-8")
 
 
 @router.api_route("/twilio/status/{call_id}", methods=["GET", "POST"])
@@ -649,9 +686,10 @@ async def twilio_status_callback(
         except Exception:
             pass
 
-    # Validate carrier signature if X-Twilio-Signature header is provided
-    if request is not None and request.headers.get("x-twilio-signature") and settings.TWILIO_AUTH_TOKEN:
-        valid, reason = await verify_twilio_webhook_request(request, body_params=payload, enforce_signature=True)
+    # Validate carrier signature: enforce in production or whenever signature header is sent
+    is_production = getattr(settings, "APP_ENV", "development") == "production"
+    if is_production or (request is not None and request.headers.get("x-twilio-signature")):
+        valid, reason = await verify_twilio_webhook_request(request, body_params=payload, enforce_signature=is_production)
         if not valid:
             log_telephony_event(
                 event_type="carrier_signature_rejected",
@@ -713,6 +751,18 @@ async def twilio_status_callback(
         call.status = mapped_status
         db.commit()
 
+    log_telephony_event(
+        event_type="call_status_updated",
+        call_id=call_id,
+        provider="twilio",
+        tenant_id=call.organization_id if call else None,
+        details={
+            "raw_status": raw_status,
+            "mapped_status": call.status,
+            "duration": call.duration_seconds,
+        }
+    )
+
     return {
         "status": "ok",
         "call_id": call_id,
@@ -749,6 +799,15 @@ async def exotel_inbound_webhook(request: Request, db: Session = Depends(get_db)
     return {"status": "ok", "call_id": parsed.get("provider_call_id")}
 
 
+_LAST_WEBHOOK_CHECK: Dict[str, Any] = {
+    "timestamp": None,
+    "success": None,
+    "status_code": None,
+    "latency_ms": None,
+    "error": None,
+}
+
+
 @router.get("/health/ping")
 async def telephony_health_ping():
     """Lightweight health ping endpoint for webhook & tunnel reachability probes."""
@@ -774,17 +833,19 @@ async def telephony_public_connectivity_health(
     is_https = settings.is_public_https()
     stream_sample = settings.get_public_ws_url("/ws/voice/{call_id}")
     is_wss = stream_sample.lower().startswith("wss://")
+    backend_port = getattr(settings, "PORT", 8000) or 8000
 
     diagnostics = []
     if not public_base:
         diagnostics.append(
-            "Missing PUBLIC_BASE_URL: Twilio PSTN requires a publicly accessible HTTPS domain "
-            "(e.g., via ngrok or Cloudflare Tunnel) to connect answered calls to the Stratum AI voice engine."
+            f"Missing PUBLIC_BASE_URL: Your backend is running locally on port {backend_port}. "
+            f"Start your public HTTPS tunnel: `ngrok http {backend_port}`. "
+            "Copy the active HTTPS URL into Settings and run the connection check."
         )
     elif is_placeholder:
         diagnostics.append(
             f"Placeholder domain detected ('{public_base}'): External telephony carriers cannot reach placeholder URLs. "
-            "Please start an active tunnel (`ngrok http 8000`) and paste your live HTTPS URL into Settings."
+            f"Please run `ngrok http {backend_port}` and paste the live HTTPS forwarding URL into Settings."
         )
     elif not is_https:
         diagnostics.append(
@@ -818,13 +879,24 @@ async def telephony_public_connectivity_health(
                     "latency_ms": latency_ms,
                     "response": res.json() if res.headers.get("content-type", "").startswith("application/json") else res.text[:100],
                 }
+                _LAST_WEBHOOK_CHECK["timestamp"] = datetime.now(timezone.utc).isoformat()
+                _LAST_WEBHOOK_CHECK["success"] = (res.status_code == 200)
+                _LAST_WEBHOOK_CHECK["status_code"] = res.status_code
+                _LAST_WEBHOOK_CHECK["latency_ms"] = latency_ms
+                _LAST_WEBHOOK_CHECK["error"] = None
         except Exception as exc:
+            latency_ms = round((time.time() - t0) * 1000, 2)
             probe_result = {
                 "probe_target": probe_target,
                 "reachable": False,
-                "latency_ms": round((time.time() - t0) * 1000, 2),
+                "latency_ms": latency_ms,
                 "error": str(exc),
             }
+            _LAST_WEBHOOK_CHECK["timestamp"] = datetime.now(timezone.utc).isoformat()
+            _LAST_WEBHOOK_CHECK["success"] = False
+            _LAST_WEBHOOK_CHECK["status_code"] = None
+            _LAST_WEBHOOK_CHECK["latency_ms"] = latency_ms
+            _LAST_WEBHOOK_CHECK["error"] = str(exc)
 
     if not public_base:
         overall_status = "missing_public_url"
@@ -839,12 +911,20 @@ async def telephony_public_connectivity_health(
     else:
         overall_status = "healthy"
 
+    tunnel_guidance = (
+        f"Your backend is running locally. Start your public HTTPS tunnel using verified backend port {backend_port}. "
+        f"Example: `ngrok http {backend_port}`. Copy the active HTTPS URL into Settings and run the connection check."
+    )
+
     return {
         "status": overall_status,
         "configured": bool(public_base),
         "public_base_url": public_base,
         "is_https": is_https,
+        "is_placeholder": is_placeholder,
         "media_stream_is_wss": is_wss,
+        "backend_port": backend_port,
+        "tunnel_guidance": tunnel_guidance,
         "endpoints": {
             "twiml_url_template": settings.get_public_http_url("/api/telephony/twilio/twiml/{call_id}"),
             "gather_url_template": settings.get_public_http_url("/api/telephony/twilio/gather/{call_id}"),
@@ -860,5 +940,6 @@ async def telephony_public_connectivity_health(
             "has_auth_token": bool(settings.TWILIO_AUTH_TOKEN),
         },
         "reachability_probe": probe_result,
+        "last_webhook_check": _LAST_WEBHOOK_CHECK,
         "diagnostics": diagnostics,
     }

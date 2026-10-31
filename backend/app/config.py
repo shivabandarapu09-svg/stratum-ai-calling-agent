@@ -235,33 +235,41 @@ class Settings(BaseSettings):
             return True
         placeholders = [
             "your-domain", "your-ngrok", "your-tunnel", "example.com",
-            "placeholder", "localhost", "127.0.0.1", "0.0.0.0", "change-me"
+            "placeholder", "localhost", "127.0.0.1", "0.0.0.0", "::1",
+            "change-me", ".local", ".internal", "test.com"
         ]
         return any(ph in target for ph in placeholders)
 
-    def validate_public_url(self, url: str = None) -> tuple[bool, str]:
+    def validate_public_url(self, url: str = None) -> tuple[bool, str, str]:
         """
-        Strict validation of public webhook URL for external telephony carriers (Twilio, Exotel).
-        Returns (is_valid, actionable_diagnostic_message).
+        Strict pre-flight validation of public webhook base URL for telephony carriers (Twilio, Exotel).
+        Returns (is_valid: bool, error_code: str, remediation_message: str).
         """
         target = (url if url is not None else self.get_public_base_url()).strip()
         if not target:
-            return False, (
+            return False, "ERR_PUBLIC_URL_MISSING", (
                 "Public Webhook URL is not configured. External telephony carriers (Twilio) require a public HTTPS "
                 "endpoint to deliver call webhooks to Stratum AI. Please run an HTTPS tunnel (e.g., `ngrok http 8000`) "
                 "and configure PUBLIC_BASE_URL in Settings or Integrations."
             )
-        if self.is_placeholder_url(target):
-            return False, (
-                f"Configured Public Webhook URL '{target}' contains a placeholder domain that external carriers cannot reach. "
-                "Please replace it with an active HTTPS tunnel URL (e.g. from ngrok or your cloud domain) in Settings."
+        lower_target = target.lower()
+        if any(h in lower_target for h in ["localhost", "127.0.0.1", "0.0.0.0", "::1"]):
+            return False, "ERR_PUBLIC_URL_LOCAL_HOST", (
+                f"Configured Public Base URL '{target}' points to a local loopback address. "
+                "Twilio runs in the cloud and cannot reach your localhost directly. "
+                "Please expose port 8000 using an HTTPS tunnel (e.g. `ngrok http 8000`) and configure the resulting public URL."
             )
-        if not target.lower().startswith("https://"):
-            return False, (
-                f"Configured Public Webhook URL '{target}' is not secure HTTPS. External carriers require a valid HTTPS URL "
+        if self.is_placeholder_url(target):
+            return False, "ERR_PUBLIC_URL_PLACEHOLDER", (
+                f"Configured Public Base URL '{target}' contains a placeholder domain that external carriers cannot reach. "
+                "Please replace it with your active public HTTPS tunnel URL (e.g. from ngrok or your cloud domain) in Settings."
+            )
+        if not lower_target.startswith("https://"):
+            return False, "ERR_PUBLIC_URL_NOT_HTTPS", (
+                f"Configured Public Base URL '{target}' is not secure HTTPS. External carriers (Twilio) require a valid HTTPS URL "
                 "for all voice webhooks and TwiML actions."
             )
-        return True, "Valid public HTTPS URL ready for telephony carrier webhooks."
+        return True, "OK", "Valid public HTTPS URL ready for telephony carrier webhooks."
 
     def is_public_https(self) -> bool:
         """Checks if the configured public base URL uses secure HTTPS and is not a placeholder."""

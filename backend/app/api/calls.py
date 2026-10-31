@@ -52,18 +52,19 @@ async def initiate_call(
 
     # Pre-flight validation for Twilio PSTN calls: prevent placeholder / unreachable tunnels from triggering Twilio "check the URL" errors
     if req.provider == "twilio":
-        is_valid, validation_msg = settings.validate_public_url()
+        is_valid, error_code, validation_msg = settings.validate_public_url()
         if not is_valid:
             log_telephony_event(
-                event_type="validation_error",
+                event_type="preflight_validation_failed",
                 call_id=call_id,
                 provider="twilio",
                 level="error",
+                error_code=error_code,
                 details={"reason": validation_msg, "to_phone": req.customer_phone}
             )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=validation_msg
+                detail=f"[{error_code}] {validation_msg}"
             )
 
     callback_url = settings.get_public_http_url(f"/api/telephony/twilio/twiml/{call_id}")

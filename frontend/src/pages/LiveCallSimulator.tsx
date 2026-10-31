@@ -3,12 +3,13 @@ import {
   Phone, PhoneOff, Mic, Volume2, ShieldAlert,
   UserCheck, Languages, Activity, CheckCircle2, AlertTriangle,
   Smartphone, Monitor, Send, MessageSquare,
-  Play, BookOpen, Building2, Target, Terminal, Clock
+  Play, BookOpen, Building2, Target, Terminal, Clock, RefreshCw
 } from 'lucide-react';
 import { Agent, ToolCallEvent, KnowledgeDoc, TenantWorkspace } from '../types';
 import {
   fetchAgents, initiateOutboundCall, terminateCall, fetchCallDetail,
-  fetchTelephonyStatus, previewVoiceSample, fetchKnowledgeDocs, fetchTenantWorkspaces
+  fetchTelephonyStatus, previewVoiceSample, fetchKnowledgeDocs, fetchTenantWorkspaces,
+  fetchTelephonyHealthPublic
 } from '../api';
 
 type ConnectionStep =
@@ -86,6 +87,29 @@ export const LiveCallSimulator: React.FC<{ onNavigate?: (tab: string) => void }>
     stage?: string;
   }>>([]);
   const [callSummary, setCallSummary] = useState<any>(null);
+  const [probingReachability, setProbingReachability] = useState<boolean>(false);
+  const [reachabilityFeedback, setReachabilityFeedback] = useState<string | null>(null);
+
+  const handleProbeReachability = async () => {
+    setProbingReachability(true);
+    setReachabilityFeedback(null);
+    try {
+      const data = await fetchTelephonyHealthPublic(true);
+      if (data.status === 'healthy') {
+        const ms = data.reachability_probe?.latency_ms ? ` (${data.reachability_probe.latency_ms} ms)` : '';
+        setReachabilityFeedback(`✓ Verified: Public HTTPS URL is reachable by external carriers${ms}`);
+      } else {
+        const err = data.diagnostics?.[0] || data.reachability_probe?.error || 'Reachability check failed';
+        setReachabilityFeedback(`✗ Unreachable: ${err}`);
+      }
+      const updatedStatus = await fetchTelephonyStatus();
+      setTelephonyStatus(updatedStatus);
+    } catch (err: any) {
+      setReachabilityFeedback(`✗ Error: ${err.message || 'Probe request failed'}`);
+    } finally {
+      setProbingReachability(false);
+    }
+  };
 
   // Refs
   const wsRef = useRef<WebSocket | null>(null);
@@ -918,7 +942,7 @@ export const LiveCallSimulator: React.FC<{ onNavigate?: (tab: string) => void }>
 
             {/* Real PSTN Readiness Check */}
             {callMode === 'real_phone' && (
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 text-xs space-y-2">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 text-xs space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500 dark:text-slate-400">Twilio Carrier:</span>
                   <span className={telephonyStatus?.twilio_configured ? 'text-emerald-600 dark:text-emerald-400 font-medium' : 'text-amber-600 dark:text-amber-400 font-medium'}>
@@ -933,13 +957,38 @@ export const LiveCallSimulator: React.FC<{ onNavigate?: (tab: string) => void }>
                     {telephonyStatus?.public_webhook_url || 'Not configured'}
                   </span>
                 </div>
+
+                {/* Reachability Probe Trigger */}
+                <div className="flex items-center justify-between pt-1 border-t border-slate-200 dark:border-slate-800">
+                  <span className="text-[11px] text-slate-500">External Verification:</span>
+                  <button
+                    type="button"
+                    onClick={handleProbeReachability}
+                    disabled={probingReachability || !telephonyStatus?.public_webhook_url}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium text-[10px] transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${probingReachability ? 'animate-spin text-indigo-500' : ''}`} />
+                    {probingReachability ? 'Probing...' : 'Check Reachability'}
+                  </button>
+                </div>
+
+                {reachabilityFeedback && (
+                  <div className={`p-2 rounded text-[10px] font-mono leading-tight ${
+                    reachabilityFeedback.startsWith('✓')
+                      ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                      : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                  }`}>
+                    {reachabilityFeedback}
+                  </div>
+                )}
+
                 {!telephonyStatus?.is_valid_public_https && (
                   <div className="p-2.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-[11px] space-y-1">
                     <div className="font-semibold flex items-center gap-1.5">
-                      <AlertTriangle className="w-3.5 h-3.5" /> Public HTTPS Tunnel Required
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" /> Public HTTPS Tunnel Required
                     </div>
                     <p className="text-[10px] text-slate-600 dark:text-slate-300">
-                      Twilio dials from the cloud and requires a public HTTPS URL to deliver conversational voice turns to Stratum:
+                      Your backend is running locally on port 8000. Twilio dials from the cloud and requires a public HTTPS URL:
                     </p>
                     <div className="font-mono text-[10px] bg-slate-900 text-amber-300 p-1.5 rounded">
                       1. In PowerShell: <code>ngrok http 8000</code><br/>
