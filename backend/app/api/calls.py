@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.config import settings
-from app.models import Call, Agent, Customer, CallTranscriptTurn, CallSummary, Organization
+from app.models import Call, Agent, Customer, CallTranscriptTurn, CallSummary, Organization, User
+from app.security import get_current_user, create_call_ticket
 from app.schemas import CallInitiateRequest, CallOut, CallDetailOut
 from app.telephony.web_simulator_provider import get_telephony_provider
 from app.voice.conversation_engine import VoiceConversationSession
@@ -16,8 +17,8 @@ def utc_now():
     return datetime.now(timezone.utc)
 
 @router.post("/initiate", response_model=CallDetailOut)
-async def initiate_call(req: CallInitiateRequest, db: Session = Depends(get_db)):
-    agent = db.query(Agent).filter(Agent.id == req.agent_id).first()
+async def initiate_call(req: CallInitiateRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = db.query(Agent).filter(Agent.id == req.agent_id, Agent.organization_id == user.organization_id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
@@ -154,16 +155,18 @@ async def initiate_call(req: CallInitiateRequest, db: Session = Depends(get_db))
         started_at=call.started_at,
         ended_at=call.ended_at,
         transcripts=[greeting_turn],
-        summary=None
+        summary=None,
+        ws_ticket=create_call_ticket(call.id, org_id),
     )
 
 @router.get("", response_model=List[CallOut])
 def list_calls(
     language: Optional[str] = None,
     status_filter: Optional[str] = Query(None, alias="status"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    query = db.query(Call).order_by(Call.started_at.desc())
+    query = db.query(Call).filter(Call.organization_id == user.organization_id).order_by(Call.started_at.desc())
     if language:
         query = query.filter(Call.primary_language == language)
     if status_filter:
@@ -199,8 +202,8 @@ def list_calls(
     return result
 
 @router.get("/{call_id}", response_model=CallDetailOut)
-def get_call_detail(call_id: str, db: Session = Depends(get_db)):
-    call = db.query(Call).filter(Call.id == call_id).first()
+def get_call_detail(call_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    call = db.query(Call).filter(Call.id == call_id, Call.organization_id == user.organization_id).first()
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
 
@@ -227,12 +230,13 @@ def get_call_detail(call_id: str, db: Session = Depends(get_db)):
         started_at=call.started_at,
         ended_at=call.ended_at,
         transcripts=call.transcripts,
-        summary=call.summary
+        summary=call.summary,
+        ws_ticket=create_call_ticket(call.id, call.organization_id),
     )
 
 @router.post("/{call_id}/terminate")
-async def terminate_call(call_id: str, db: Session = Depends(get_db)):
-    call = db.query(Call).filter(Call.id == call_id).first()
+async def terminate_call(call_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    call = db.query(Call).filter(Call.id == call_id, Call.organization_id == user.organization_id).first()
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
 

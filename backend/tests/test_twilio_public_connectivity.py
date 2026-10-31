@@ -21,6 +21,7 @@ from app.database import init_db, SessionLocal
 from app.models import Agent, Call
 from app.schemas import CallInitiateRequest
 from app.api.calls import initiate_call
+from conftest import make_user
 from app.api.telephony import (
     twilio_twiml_endpoint,
     twilio_gather_turn_endpoint,
@@ -105,6 +106,7 @@ def existing_call(db):
                 provider="web_simulator",
             ),
             db=db,
+            user=make_user(db, agent.organization_id),
         )
     )
     call_id = call_out.id

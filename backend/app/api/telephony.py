@@ -9,7 +9,8 @@ from typing import Optional, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.config import settings
-from app.models import Call
+from app.models import Call, User
+from app.security import get_current_user, require_admin, create_call_ticket
 from app.voice.conversation_engine import VoiceConversationSession
 from app.ai.tts_providers import clean_text_for_speech
 from app.telephony.twilio_provider import TwilioProvider
@@ -52,6 +53,7 @@ from app.telephony.twilio_security import (
     compute_twilio_signature,
     verify_twilio_webhook_request,
     redact_telephony_payload,
+    require_twilio_signature,
 )
 
 class TelephonyConfigRequest(BaseModel):
@@ -71,7 +73,7 @@ class TestConnectionRequest(BaseModel):
     auth_token: Optional[str] = None
 
 @router.get("/status")
-def get_telephony_status():
+def get_telephony_status(user: User = Depends(get_current_user)):
     twilio = TwilioProvider()
     public_base = settings.get_public_base_url()
     return {
@@ -90,7 +92,7 @@ def get_telephony_status():
     }
 
 @router.post("/config")
-def update_telephony_config(req: TelephonyConfigRequest):
+def update_telephony_config(req: TelephonyConfigRequest, user: User = Depends(require_admin)):
     env_updates = {}
     if req.provider:
         settings.TELEPHONY_PROVIDER = req.provider
@@ -146,7 +148,7 @@ def update_telephony_config(req: TelephonyConfigRequest):
     }
 
 @router.post("/test-connection")
-async def test_twilio_connection(req: TestConnectionRequest):
+async def test_twilio_connection(req: TestConnectionRequest, user: User = Depends(require_admin)):
     sid = req.account_sid.strip() if req.account_sid else settings.TWILIO_ACCOUNT_SID
     token = req.auth_token.strip() if req.auth_token else settings.TWILIO_AUTH_TOKEN
 
@@ -282,7 +284,7 @@ def _build_twiml_turn_response(
 </Response>"""
 
 
-@router.api_route("/twilio/twiml/{call_id}", methods=["GET", "POST"])
+@router.api_route("/twilio/twiml/{call_id}", methods=["GET", "POST"], dependencies=[Depends(require_twilio_signature)])
 async def twilio_twiml_endpoint(
     call_id: str,
     request: Request,
@@ -314,7 +316,8 @@ async def twilio_twiml_endpoint(
     escaped_greeting = _xml_escape_speech(greeting_text)
 
     if mode == "stream":
-        ws_url = settings.get_public_ws_url(f"/ws/voice/{call_id}", request)
+        ticket = create_call_ticket(call_id, call.organization_id)
+        ws_url = settings.get_public_ws_url(f"/ws/voice/{call_id}/{ticket}", request)
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="{twiml_voice}" language="{bcp47}">{escaped_greeting}</Say>
@@ -353,7 +356,7 @@ async def twilio_twiml_endpoint(
     return Response(content=twiml, media_type="application/xml")
 
 
-@router.post("/twilio/gather/{call_id}")
+@router.post("/twilio/gather/{call_id}", dependencies=[Depends(require_twilio_signature)])
 async def twilio_gather_turn_endpoint(
     call_id: str,
     request: Request,
@@ -437,7 +440,7 @@ async def twilio_gather_turn_endpoint(
         return Response(content=twiml, media_type="application/xml")
 
 
-@router.post("/twilio/reprompt/{call_id}")
+@router.post("/twilio/reprompt/{call_id}", dependencies=[Depends(require_twilio_signature)])
 async def twilio_reprompt_endpoint(
     call_id: str,
     request: Request = None,
@@ -494,7 +497,7 @@ async def twilio_reprompt_endpoint(
     return Response(content=twiml, media_type="application/xml")
 
 
-@router.post("/twilio/status/{call_id}")
+@router.post("/twilio/status/{call_id}", dependencies=[Depends(require_twilio_signature)])
 async def twilio_status_callback(
     call_id: str,
     request: Request,
@@ -559,20 +562,39 @@ async def twilio_status_callback(
     }
 
 
-@router.post("/twilio/webhook")
+@router.post("/twilio/webhook", dependencies=[Depends(require_twilio_signature)])
 async def twilio_inbound_webhook(request: Request, db: Session = Depends(get_db)):
     form_data = await request.form()
     payload = dict(form_data)
     twilio = TwilioProvider()
     parsed = twilio.parse_webhook(payload)
 
-    ws_url = settings.get_public_ws_url(f"/ws/voice/{parsed.get('provider_call_id')}", request)
+    provider_call_id = parsed.get("provider_call_id")
+    call = None
+    if provider_call_id:
+        call = (
+            db.query(Call)
+            .filter((Call.id == provider_call_id) | (Call.provider_call_id == provider_call_id))
+            .first()
+        )
+
+    if not call:
+        # Inbound call routing to an agent is not implemented yet; never open an unauthenticated stream.
+        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Kajal-Neural" language="en-IN">Sorry, this number is not accepting inbound calls right now. Goodbye.</Say>
+    <Hangup/>
+</Response>"""
+        return Response(content=twiml, media_type="application/xml")
+
+    ticket = create_call_ticket(call.id, call.organization_id)
+    ws_url = settings.get_public_ws_url(f"/ws/voice/{call.id}/{ticket}", request)
 
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Aditi" language="hi-IN">नमस्ते! स्ट्रैटम एआई वॉइस असिस्टेंट में आपका स्वागत है।</Say>
     <Connect>
-        <Stream url="{ws_url}" />
+        <Stream url="{html.escape(ws_url, quote=True)}" />
     </Connect>
 </Response>"""
 
@@ -601,6 +623,7 @@ async def telephony_health_ping():
 @router.get("/health/public")
 async def telephony_public_connectivity_health(
     probe: bool = Query(default=False),
+    user: User = Depends(get_current_user),
 ):
     """
     Evaluates public HTTPS reachability and WebSocket connectivity readiness for Twilio.

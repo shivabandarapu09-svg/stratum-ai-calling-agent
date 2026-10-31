@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   LayoutDashboard, PhoneCall, History, Bot, BookOpen,
   Send, BarChart3, Settings as SettingsIcon, Zap, Layers, ShieldCheck,
-  Building2, Users, Cpu, ChevronLeft, ChevronRight, Menu, X
+  Building2, Users, Cpu, ChevronLeft, ChevronRight, Menu, X, LogOut
 } from 'lucide-react';
 import { Dashboard } from './pages/Dashboard';
 import { LiveCallSimulator } from './pages/LiveCallSimulator';
@@ -16,7 +16,8 @@ import { Settings } from './pages/Settings';
 import { Companies } from './pages/Companies';
 import { Integrations } from './pages/Integrations';
 import { ContactsLeads } from './pages/ContactsLeads';
-import { fetchHealth } from './api';
+import { Login } from './pages/Login';
+import { fetchHealth, getStoredSession, logout, UNAUTHORIZED_EVENT, AuthSession } from './api';
 import { ThemeToggle } from './components/ui/ThemeToggle';
 import { Badge } from './components/ui/Badge';
 
@@ -25,12 +26,30 @@ export const App: React.FC = () => {
   const [isHealthy, setIsHealthy] = useState<boolean>(true);
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+  const [session, setSession] = useState<AuthSession | null>(() => getStoredSession());
+  const [sessionExpired, setSessionExpired] = useState<boolean>(false);
 
   useEffect(() => {
     fetchHealth()
       .then((h) => setIsHealthy(h.status === 'healthy'))
       .catch(() => setIsHealthy(false));
   }, []);
+
+  // apiFetch() fires this event when the backend answers 401 (expired / invalid token).
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setSession(null);
+      setSessionExpired(true);
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, []);
+
+  const handleLogout = () => {
+    logout();
+    setSessionExpired(false);
+    setSession(null);
+  };
 
   const navGroups = [
     {
@@ -69,6 +88,18 @@ export const App: React.FC = () => {
     setActiveTab(tab);
     setIsMobileMenuOpen(false);
   };
+
+  if (!session) {
+    return (
+      <Login
+        sessionExpired={sessionExpired}
+        onLoggedIn={(s) => {
+          setSessionExpired(false);
+          setSession(s);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="flex h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans overflow-hidden transition-colors duration-200">
@@ -241,8 +272,17 @@ export const App: React.FC = () => {
             </button>
 
             {/* Dual Theme Switcher (Stripe/Linear style) */}
-            <div className="pl-1 border-l border-slate-200 dark:border-slate-800">
+            <div className="pl-1 border-l border-slate-200 dark:border-slate-800 flex items-center gap-2">
               <ThemeToggle variant="icon" />
+              <button
+                type="button"
+                onClick={handleLogout}
+                title={`Sign out ${session.user_name}`}
+                aria-label="Sign out"
+                className="p-2 rounded-lg text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
             </div>
           </div>
         </header>

@@ -38,6 +38,25 @@ from app.ai.llm_providers import MockLLMProvider
 from app.ai.tts_providers import MockTTSProvider
 
 
+def _make_user(db, organization_id, role="admin"):
+    """Create a throwaway user so the demo can call the (now authenticated) handlers directly."""
+    import uuid
+    from app.models import User
+    user = User(
+        id=str(uuid.uuid4()),
+        organization_id=organization_id,
+        email=f"{role}-{uuid.uuid4().hex[:10]}@demo.local",
+        hashed_password="!unusable-demo-hash",
+        full_name="Demo User",
+        role=role,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+
 def build_sample_docx() -> str:
     doc_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -75,6 +94,7 @@ def run_demo():
         # 1. Onboard Two Independent Companies
         print("\n[STEP 1] Onboarding Two Independent Companies (Tenant A & Tenant B)...")
         tenant_a = onboard_company_tenant(
+            user=_make_user(db, "org-stratum-global-001", "superadmin"),
             payload=TenantWorkspaceOnboardRequest(
                 company_name="Aura Solar Energy (Demo)",
                 industry="Renewable Energy & Rooftop Solar",
@@ -98,6 +118,7 @@ def run_demo():
             db=db,
         )
         tenant_b = onboard_company_tenant(
+            user=_make_user(db, "org-stratum-global-001", "superadmin"),
             payload=TenantWorkspaceOnboardRequest(
                 company_name="MedLife Care Hospital (Demo)",
                 industry="Multi-Specialty Healthcare",
@@ -112,7 +133,9 @@ def run_demo():
             db=db,
         )
         org_a = tenant_a.organization_id
+        user_org_a = _make_user(db, org_a)
         org_b = tenant_b.organization_id
+        user_org_b = _make_user(db, org_b)
         agent_a = db.query(Agent).filter(Agent.organization_id == org_a).first()
         agent_b = db.query(Agent).filter(Agent.organization_id == org_b).first()
         print(f"  -> Tenant A Created: {tenant_a.company_name} (org_id={org_a[:8]}..., agent_id={agent_a.id[:8]}...)")
@@ -137,7 +160,7 @@ def run_demo():
                 simulated_html_pages={web_url: html_with_attack},
                 auto_approve=False,  # Requires instructor approval first!
             ),
-            x_tenant_id=org_a,
+            x_tenant_id=org_a, user=user_org_a,
             db=db,
         )
         web_doc = web_docs[0]
@@ -153,7 +176,7 @@ def run_demo():
             try:
                 ingest_website_source(
                     payload=WebsiteIngestRequest(organization_id=org_a, url=bad_url),
-                    x_tenant_id=org_a,
+                    x_tenant_id=org_a, user=user_org_a,
                     db=db,
                 )
             except HTTPException as exc:
@@ -169,7 +192,7 @@ def run_demo():
                 file_content_base64=build_sample_docx(),
                 auto_approve=True,
             ),
-            x_tenant_id=org_a,
+            x_tenant_id=org_a, user=user_org_a,
             db=db,
         )
         print(f"  -> Parsed DOCX '{docx_doc.title}' (v{docx_doc.version}, chunks={docx_doc.chunks_count}, hash={docx_doc.content_hash[:12]}...)")
@@ -178,7 +201,7 @@ def run_demo():
         approved_web = approve_or_disable_source(
             doc_id=web_doc.id,
             payload=KnowledgeApprovalRequest(action="approve", actor="instructor@aurasolar.in"),
-            x_tenant_id=org_a,
+            x_tenant_id=org_a, user=user_org_a,
             db=db,
         )
         print(f"  -> Instructor Approved '{approved_web.title}' -> status={approved_web.approval_status}")
@@ -190,14 +213,14 @@ def run_demo():
                 query="3kW Bifacial Rooftop Solar System PM Surya Ghar subsidy",
                 organization_id=org_b,
             ),
-            x_tenant_id=org_b,
+            x_tenant_id=org_b, user=user_org_b,
             db=db,
         )
         print(f"  -> Tenant B search results for Tenant A solar subsidy: {len(tenant_b_results)} results (0 cross-tenant leak!)")
         try:
             search_knowledge_endpoint(
                 query_req=KnowledgeSearchQuery(query="solar", organization_id=org_a),
-                x_tenant_id=org_b,  # Tenant B trying to pass Tenant A's org_id
+                x_tenant_id=org_b, user=user_org_b,  # Tenant B trying to pass Tenant A's org_id
                 db=db,
             )
         except HTTPException as exc:

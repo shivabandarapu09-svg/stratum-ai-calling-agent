@@ -27,16 +27,19 @@ app = FastAPI(
     title=settings.APP_NAME,
     description="Stratum AI — Hyper-Realistic Multilingual AI Calling Agent Platform synthesizing Sarvam AI, Vapi, Retell AI, Bolna, Trikon, and Outpero.",
     version="3.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url="/docs" if settings.DEBUG or settings.APP_ENV == "development" else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if settings.DEBUG or settings.APP_ENV == "development" else None,
 )
 
-# Enable CORS for frontend dashboard
+# CORS: only the configured dashboard origins may call the API from a browser (see CORS_ORIGINS).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Tenant-ID"],
 )
 
 # Mount API Routers
@@ -56,22 +59,9 @@ def root():
         "status": "online",
         "service": settings.APP_NAME,
         "platform": "Stratum Enterprise AI",
-        "languages_supported": settings.SUPPORTED_LANGUAGES,
-        "speed_to_lead_latency_target": "<5 seconds",
-        "industry_blueprints": [
-            "real_estate", "clinic_healthcare", "education_admissions",
-            "ecommerce_cod", "b2b_saas_sdr", "bfsi_fintech"
-        ]
     }
 
 @app.get("/api/health")
 def health_check():
-    return {
-        "status": "healthy",
-        "platform": "Stratum Enterprise AI",
-        "llm_provider": settings.DEFAULT_LLM_PROVIDER,
-        "stt_provider": settings.DEFAULT_STT_PROVIDER,
-        "tts_provider": settings.DEFAULT_TTS_PROVIDER,
-        "telephony": settings.TELEPHONY_PROVIDER,
-        "speed_to_lead_auto_dial": settings.SPEED_TO_LEAD_AUTO_DIAL
-    }
+    # Public liveness probe: deliberately exposes no provider or configuration details.
+    return {"status": "healthy", "platform": "Stratum Enterprise AI"}

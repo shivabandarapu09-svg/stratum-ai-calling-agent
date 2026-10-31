@@ -172,6 +172,8 @@ class CallOut(BaseModel):
 
 class CallDetailOut(CallOut):
     transcripts: List[CallTranscriptTurnOut] = []
+    # Short-lived signed ticket the browser passes as ?ticket= when opening /ws/voice/{call_id}.
+    ws_ticket: Optional[str] = None
 
 # Inbound Leads & Speed-to-Lead
 class InboundLeadCreate(BaseModel):

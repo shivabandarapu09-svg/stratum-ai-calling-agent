@@ -433,7 +433,7 @@ export const LiveCallSimulator: React.FC<{ onNavigate?: (tab: string) => void }>
       startAmbientSoundscape(ambientMode);
       const loc = window.location;
       const wsProtocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${loc.host}/ws/voice/${callData.id}`;
+      const wsUrl = `${wsProtocol}//${loc.host}/ws/voice/${callData.id}?ticket=${encodeURIComponent(callData.ws_ticket || '')}`;
       const socket = new WebSocket(wsUrl);
       wsRef.current = socket;
 

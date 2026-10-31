@@ -1,7 +1,11 @@
+import logging
 import os
+import secrets
 from typing import List, Dict, Any
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_validator
 from pydantic_settings import BaseSettings
+
+_logger = logging.getLogger("stratum.config")
 
 class Settings(BaseSettings):
     model_config = ConfigDict(env_file=".env", extra="ignore")
@@ -10,15 +14,26 @@ class Settings(BaseSettings):
     APP_NAME: str = "Stratum AI - Hyper-Realistic Multilingual AI Calling Platform"
     PLATFORM_NAME: str = "Stratum Enterprise AI"
     APP_ENV: str = "development"
-    DEBUG: bool = True
+    DEBUG: bool = False
     PORT: int = 8000
     HOST: str = "0.0.0.0"
     API_PREFIX: str = "/api"
 
     # Database & Storage
     DATABASE_URL: str = "sqlite:///./stratum.db"
-    SECRET_KEY: str = "super-secret-jwt-key-stratum-ai-calling-2026"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    # Signing key for JWTs and call tickets. Must be set via the environment/.env in production.
+    # When empty in development a random per-process key is generated (tokens reset on restart).
+    SECRET_KEY: str = ""
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 8  # 8 hours
+    CALL_TICKET_TTL_SECONDS: int = 60 * 60 * 6  # WebSocket call tickets live 6 hours
+
+    # Browser origins allowed to call the API with credentials (JSON list in .env, e.g. ["https://app.example.com"]).
+    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+    # Bootstrap admin account created on first start. If ADMIN_PASSWORD is empty a random one
+    # is generated and printed once to the server log.
+    ADMIN_EMAIL: str = "admin@stratum.ai"
+    ADMIN_PASSWORD: str = ""
 
     # AI Providers Configuration
     DEFAULT_LLM_PROVIDER: str = "mock"      # Options: groq, openai, mock
@@ -46,7 +61,11 @@ class Settings(BaseSettings):
 
     # Speed-to-Lead & Webhook Automation
     SPEED_TO_LEAD_AUTO_DIAL: bool = True
-    WEBHOOK_SECRET: str = "stratum-speed-lead-secret-key"
+    # Shared secret that lead sources (Meta, Zapier, IndiaMART...) must send with inbound lead
+    # webhooks (X-Webhook-Secret header). Empty = auto-generated in dev, required in production.
+    WEBHOOK_SECRET: str = ""
+    # Reject Twilio webhooks that lack a valid X-Twilio-Signature. Only disable for local tests.
+    ENFORCE_TWILIO_SIGNATURES: bool = True
     WHATSAPP_API_TOKEN: str = ""
     WHATSAPP_PHONE_NUMBER_ID: str = ""
     WHATSAPP_MOCK_ENABLED: bool = True
@@ -208,6 +227,22 @@ class Settings(BaseSettings):
     CALLING_HOURS_END: int = 20    # 8:00 PM IST
     MAX_CALL_RETRIES: int = 3
     CONSENT_DISCLOSURE_ENABLED: bool = True
+
+    @model_validator(mode="after")
+    def _ensure_secrets(self):
+        is_prod = (self.APP_ENV or "").lower() in ("production", "prod", "staging")
+        weak = {"", "super-secret-jwt-key-change-this-in-production", "changeme", "secret"}
+        if (self.SECRET_KEY or "") in weak or len(self.SECRET_KEY) < 16:
+            if is_prod:
+                raise ValueError("SECRET_KEY must be set to a strong random value (>=16 chars) when APP_ENV is production/staging")
+            self.SECRET_KEY = secrets.token_urlsafe(48)
+            _logger.warning("SECRET_KEY not set: generated a temporary key. Logins reset on restart.")
+        if not self.WEBHOOK_SECRET:
+            if is_prod:
+                raise ValueError("WEBHOOK_SECRET must be set when APP_ENV is production/staging")
+            self.WEBHOOK_SECRET = secrets.token_urlsafe(24)
+            _logger.warning("WEBHOOK_SECRET not set: generated a temporary secret for inbound lead webhooks.")
+        return self
 
     def get_public_base_url(self) -> str:
         """

@@ -4,7 +4,8 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import InboundLead, Customer, Agent, Call, Organization
+from app.models import InboundLead, Customer, Agent, Call, Organization, User
+from app.security import get_current_user, verify_webhook_secret
 from app.schemas import InboundLeadCreate, InboundLeadOut, SpeedToLeadSimulateRequest, SpeedToLeadResponse
 from app.voice.conversation_engine import VoiceConversationSession
 
@@ -17,10 +18,11 @@ def utc_now():
 def get_inbound_leads(
     limit: int = Query(50, ge=1, le=100),
     source: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Retrieve all inbound leads captured via Meta, Google Ads, IndiaMART, or Webhooks."""
-    query = db.query(InboundLead)
+    query = db.query(InboundLead).filter(InboundLead.organization_id == user.organization_id)
     if source:
         query = query.filter(InboundLead.source == source)
     leads = query.order_by(InboundLead.created_at.desc()).limit(limit).all()
@@ -48,7 +50,7 @@ def get_inbound_leads(
         results.append(InboundLeadOut(**lead_dict))
     return results
 
-@router.post("/webhook")
+@router.post("/webhook", dependencies=[Depends(verify_webhook_secret)])
 async def receive_inbound_webhook(
     request: Request,
     db: Session = Depends(get_db)
@@ -79,13 +81,19 @@ async def receive_inbound_webhook(
     agent = None
     if agent_id:
         agent = db.query(Agent).filter(Agent.id == agent_id, Agent.is_active == True).first()
-    if not agent:
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found or inactive")
+    else:
         agent = db.query(Agent).filter(Agent.is_active == True).first()
-    if not agent:
-        raise HTTPException(status_code=404, detail="No active AI Calling Agent found to route the lead")
+        if not agent:
+            raise HTTPException(status_code=404, detail="No active AI Calling Agent found to route the lead")
 
-    # Find or create customer
-    customer = db.query(Customer).filter(Customer.phone == phone).first()
+    # Find or create customer (scoped to the agent's organization)
+    customer = (
+        db.query(Customer)
+        .filter(Customer.phone == phone, Customer.organization_id == agent.organization_id)
+        .first()
+    )
     if not customer:
         customer = Customer(
             organization_id=agent.organization_id,
@@ -150,18 +158,23 @@ async def receive_inbound_webhook(
 @router.post("/simulate", response_model=SpeedToLeadResponse)
 def simulate_speed_to_lead(
     payload: SpeedToLeadSimulateRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     Test Outpero's Sub-30-Second Speed-to-Lead Trigger live from the dashboard.
     Simulates an instant Meta/Google lead submission and triggers an automated AI call.
     """
     t_start = time.time()
-    agent = db.query(Agent).filter(Agent.id == payload.agent_id).first()
+    agent = db.query(Agent).filter(Agent.id == payload.agent_id, Agent.organization_id == user.organization_id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    customer = db.query(Customer).filter(Customer.phone == payload.phone).first()
+    customer = (
+        db.query(Customer)
+        .filter(Customer.phone == payload.phone, Customer.organization_id == user.organization_id)
+        .first()
+    )
     if not customer:
         customer = Customer(
             organization_id=agent.organization_id,

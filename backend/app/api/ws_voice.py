@@ -2,7 +2,8 @@ import asyncio
 import json
 import base64
 import time
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from typing import Optional
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models import Call
@@ -14,12 +15,35 @@ from app.voice.audio_codec import (
     validate_twilio_media_format,
 )
 from app.ai.stt_providers import get_stt_provider
+from app.security import verify_call_ticket
 
 router = APIRouter(tags=["WebSocket Voice"])
 
 
+# WebSocket close code used when the call ticket is missing, expired, or issued for another call.
+WS_UNAUTHORIZED = 4401
+
+
 @router.websocket("/ws/voice/{call_id}")
-async def websocket_voice_endpoint(websocket: WebSocket, call_id: str):
+async def websocket_voice_endpoint(websocket: WebSocket, call_id: str, ticket: Optional[str] = Query(default=None)):
+    """Browser studio entry point: `/ws/voice/{call_id}?ticket=<signed call ticket from /api/calls/...>`."""
+    if not verify_call_ticket(ticket, call_id):
+        # Closing before accept() rejects the handshake, so no session/DB work happens for strangers.
+        await websocket.close(code=WS_UNAUTHORIZED)
+        return
+    await _run_voice_session(websocket, call_id)
+
+
+@router.websocket("/ws/voice/{call_id}/{ticket}")
+async def websocket_voice_twilio_endpoint(websocket: WebSocket, call_id: str, ticket: str):
+    """Twilio Media Streams entry point: Twilio drops query strings on <Stream url>, so the ticket is in the path."""
+    if not verify_call_ticket(ticket, call_id):
+        await websocket.close(code=WS_UNAUTHORIZED)
+        return
+    await _run_voice_session(websocket, call_id)
+
+
+async def _run_voice_session(websocket: WebSocket, call_id: str):
     await websocket.accept()
     db: Session = SessionLocal()
 

@@ -3,7 +3,8 @@ from typing import List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models import Agent, Organization
+from app.models import Agent, User
+from app.security import get_current_user
 from app.schemas import AgentCreate, AgentUpdate, AgentOut, VoicePreviewRequest
 from app.config import settings
 from app.ai.tts_providers import get_tts_provider
@@ -11,17 +12,16 @@ from app.ai.tts_providers import get_tts_provider
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
 @router.get("", response_model=List[AgentOut])
-def list_agents(db: Session = Depends(get_db)):
-    agents = db.query(Agent).all()
-    return agents
+def list_agents(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return db.query(Agent).filter(Agent.organization_id == user.organization_id).all()
 
 @router.get("/voices/available")
-def get_available_voices():
+def get_available_voices(user: User = Depends(get_current_user)):
     """Return dictionary of available Indian neural voices & personas per language."""
     return settings.DEFAULT_VOICES
 
 @router.post("/voices/preview")
-async def preview_voice(req: VoicePreviewRequest):
+async def preview_voice(req: VoicePreviewRequest, user: User = Depends(get_current_user)):
     """
     Synthesize a live neural voice sample so users can audition voice personas
     (pitch, speed, language, Hinglish warmth) directly in the Stratum Studio.
@@ -51,7 +51,7 @@ async def preview_voice(req: VoicePreviewRequest):
     }
 
 @router.get("/blueprints/templates")
-def get_blueprint_templates():
+def get_blueprint_templates(user: User = Depends(get_current_user)):
     """Return pre-configured Stratum industry blueprints for instant AI employee deployment."""
     return [
         {
@@ -142,20 +142,16 @@ def get_blueprint_templates():
     ]
 
 @router.get("/{agent_id}", response_model=AgentOut)
-def get_agent(agent_id: str, db: Session = Depends(get_db)):
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+def get_agent(agent_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = db.query(Agent).filter(Agent.id == agent_id, Agent.organization_id == user.organization_id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     return agent
 
 @router.post("", response_model=AgentOut, status_code=status.HTTP_201_CREATED)
-def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
-    org = db.query(Organization).first()
-    if not org:
-        raise HTTPException(status_code=400, detail="Organization not found")
-
+def create_agent(payload: AgentCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     agent = Agent(
-        organization_id=org.id,
+        organization_id=user.organization_id,
         name=payload.name,
         company=payload.company,
         purpose=payload.purpose,
@@ -188,12 +184,14 @@ def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
     return agent
 
 @router.put("/{agent_id}", response_model=AgentOut)
-def update_agent(agent_id: str, payload: AgentUpdate, db: Session = Depends(get_db)):
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+def update_agent(agent_id: str, payload: AgentUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = db.query(Agent).filter(Agent.id == agent_id, Agent.organization_id == user.organization_id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
     update_data = payload.model_dump(exclude_unset=True)
+    update_data.pop("organization_id", None)  # tenant can never be reassigned from the client
+    update_data.pop("id", None)
     for field, val in update_data.items():
         setattr(agent, field, val)
 
@@ -202,8 +200,8 @@ def update_agent(agent_id: str, payload: AgentUpdate, db: Session = Depends(get_
     return agent
 
 @router.delete("/{agent_id}")
-def delete_agent(agent_id: str, db: Session = Depends(get_db)):
-    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+def delete_agent(agent_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    agent = db.query(Agent).filter(Agent.id == agent_id, Agent.organization_id == user.organization_id).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 

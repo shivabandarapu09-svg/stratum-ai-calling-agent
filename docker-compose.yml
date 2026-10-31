@@ -5,12 +5,16 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: voicebharat_backend
+    container_name: stratum_backend
     ports:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://voiceuser:voicepass@postgres:5432/voicebharat
       - DEFAULT_TTS_PROVIDER=edge_tts
+      - APP_ENV=${APP_ENV:-development}
+      - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in .env}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:?set WEBHOOK_SECRET in .env}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     depends_on:
       - postgres
       - redis
@@ -21,7 +25,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: voicebharat_frontend
+    container_name: stratum_frontend
     ports:
       - "3000:3000"
     depends_on:
@@ -29,21 +33,21 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: voicebharat_db
+    container_name: stratum_db
     environment:
+      # Dev-only credentials (DB is not published to the host). Change them, and recreate the pgdata
+      # volume, before deploying anywhere shared.
       POSTGRES_USER: voiceuser
       POSTGRES_PASSWORD: voicepass
       POSTGRES_DB: voicebharat
-    ports:
-      - "5432:5432"
+    # not published to the host; the backend reaches it over the compose network
     volumes:
       - pgdata:/var/lib/postgresql/data
 
   redis:
     image: redis:7-alpine
-    container_name: voicebharat_redis
-    ports:
-      - "6379:6379"
+    container_name: stratum_redis
+    # not published to the host
 
 volumes:
   pgdata:

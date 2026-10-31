@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.database import get_db
 from app.config import settings
-from app.models import Call, CallSummary, Agent, InboundLead, KnowledgeDoc
+from app.models import Call, CallSummary, Agent, InboundLead, KnowledgeDoc, User
+from app.security import get_current_user
 from app.schemas import DashboardKPIs, LanguageDistributionItem, CallOutcomeItem, LatencyMetrics
 from app.voice.call_3i_benchmark import evaluate_call_3i_benchmark, CALL_3I_SCENARIOS
 
@@ -13,18 +14,25 @@ router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
 
 @router.get("/call-3i-benchmark")
-def run_call_3i_benchmark_endpoint(k_trials: int = 1, db: Session = Depends(get_db)):
+def run_call_3i_benchmark_endpoint(
+    k_trials: int = 1,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Execute and return the Trajectory2Task Call-3I verifiable benchmark evaluation."""
+    k_trials = max(1, min(k_trials, 10))  # bound the work an authenticated caller can trigger
     return evaluate_call_3i_benchmark(db=db, k_trials=k_trials)
 
 @router.get("/dashboard")
-def get_dashboard_analytics(db: Session = Depends(get_db)):
-    calls = db.query(Call).all()
+def get_dashboard_analytics(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    org_id = user.organization_id
+    calls = db.query(Call).filter(Call.organization_id == org_id).all()
     total = len(calls)
-    leads = db.query(InboundLead).all()
+    leads = db.query(InboundLead).filter(InboundLead.organization_id == org_id).all()
     avg_speed = round(sum(l.response_time_seconds for l in leads) / len(leads), 1) if leads else 0.0
-    active_agents = db.query(Agent).filter(Agent.is_active == True).count()
+    active_agents = db.query(Agent).filter(Agent.is_active == True, Agent.organization_id == org_id).count()
     approved_docs = db.query(KnowledgeDoc).filter(
+        KnowledgeDoc.organization_id == org_id,
         KnowledgeDoc.approval_status == "approved",
         KnowledgeDoc.is_active == True
     ).count()
@@ -69,7 +77,12 @@ def get_dashboard_analytics(db: Session = Depends(get_db)):
     total_dur = sum(c.duration_seconds for c in calls)
     total_cost = sum(c.cost_estimate for c in calls)
 
-    summaries = db.query(CallSummary).all()
+    summaries = (
+        db.query(CallSummary)
+        .join(Call, CallSummary.call_id == Call.id)
+        .filter(Call.organization_id == org_id)
+        .all()
+    )
     positive = sum(1 for s in summaries if s.sentiment == "Positive")
     qualified = sum(
         1 for s in summaries

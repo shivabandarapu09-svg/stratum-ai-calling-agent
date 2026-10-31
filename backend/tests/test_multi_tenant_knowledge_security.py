@@ -21,6 +21,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.database import SessionLocal, init_db
+from conftest import make_superadmin, make_user
 from app.models import Agent, Call, KnowledgeDoc, KnowledgeChunk
 from app.schemas import (
     DocumentFileIngestRequest,
@@ -120,6 +121,7 @@ def db():
 def test_company_onboarding_and_strict_tenant_isolation(db):
     # Onboard Tenant A: Aura Solar Energy Pvt Ltd
     tenant_a = onboard_company_tenant(
+        user=make_superadmin(db),
         payload=TenantWorkspaceOnboardRequest(
             company_name="Aura Solar Energy Pvt Ltd",
             industry="Solar & CleanTech",
@@ -140,6 +142,7 @@ def test_company_onboarding_and_strict_tenant_isolation(db):
 
     # Onboard Tenant B: MedLife Care Hospital
     tenant_b = onboard_company_tenant(
+        user=make_superadmin(db),
         payload=TenantWorkspaceOnboardRequest(
             company_name="MedLife Care Hospital",
             industry="Healthcare & Diagnostics",
@@ -159,7 +162,10 @@ def test_company_onboarding_and_strict_tenant_isolation(db):
     )
 
     org_a = tenant_a.organization_id
+
+    user_org_a = make_user(db, org_a)
     org_b = tenant_b.organization_id
+    user_org_b = make_user(db, org_b)
     assert org_a != org_b
 
     # Ingest & approve a confidential solar tariff document for Tenant A
@@ -171,7 +177,7 @@ def test_company_onboarding_and_strict_tenant_isolation(db):
             raw_text="Aura Solar 3kW Bifacial Rooftop System costs Rs 1,95,000 before Rs 78,000 PM Surya Ghar subsidy, with a 25-year performance warranty.",
             auto_approve=True,
         ),
-        x_tenant_id=org_a,
+        x_tenant_id=org_a, user=user_org_a,
         db=db,
     )
 
@@ -184,14 +190,14 @@ def test_company_onboarding_and_strict_tenant_isolation(db):
             raw_text="MedLife 3-Tesla Full Brain and Spine MRI Scan package costs Rs 8,500 with same-day radiologist report delivery.",
             auto_approve=True,
         ),
-        x_tenant_id=org_b,
+        x_tenant_id=org_b, user=user_org_b,
         db=db,
     )
 
     # 1. Tenant A search finds Aura Solar but NEVER finds MedLife MRI rates
     res_a_solar = search_knowledge_endpoint(
         query_req=KnowledgeSearchQuery(query="3kW Bifacial Rooftop System subsidy warranty", organization_id=org_a),
-        x_tenant_id=org_a,
+        x_tenant_id=org_a, user=user_org_a,
         db=db,
     )
     assert len(res_a_solar) >= 1
@@ -200,7 +206,7 @@ def test_company_onboarding_and_strict_tenant_isolation(db):
 
     res_a_cross = search_knowledge_endpoint(
         query_req=KnowledgeSearchQuery(query="3-Tesla Full Brain and Spine MRI Scan package", organization_id=org_a),
-        x_tenant_id=org_a,
+        x_tenant_id=org_a, user=user_org_a,
         db=db,
     )
     assert res_a_cross == []
@@ -208,7 +214,7 @@ def test_company_onboarding_and_strict_tenant_isolation(db):
     # 2. Tenant B search finds MedLife MRI but NEVER finds Aura Solar
     res_b_mri = search_knowledge_endpoint(
         query_req=KnowledgeSearchQuery(query="3-Tesla Full Brain and Spine MRI Scan package", organization_id=org_b),
-        x_tenant_id=org_b,
+        x_tenant_id=org_b, user=user_org_b,
         db=db,
     )
     assert len(res_b_mri) >= 1
@@ -216,7 +222,7 @@ def test_company_onboarding_and_strict_tenant_isolation(db):
 
     res_b_cross = search_knowledge_endpoint(
         query_req=KnowledgeSearchQuery(query="Aura Solar 3kW Bifacial Rooftop System", organization_id=org_b),
-        x_tenant_id=org_b,
+        x_tenant_id=org_b, user=user_org_b,
         db=db,
     )
     assert res_b_cross == []
@@ -225,20 +231,20 @@ def test_company_onboarding_and_strict_tenant_isolation(db):
     with pytest.raises(HTTPException) as exc_mismatch:
         search_knowledge_endpoint(
             query_req=KnowledgeSearchQuery(query="MRI", organization_id=org_b),
-            x_tenant_id=org_a,
+            x_tenant_id=org_a, user=user_org_a,
             db=db,
         )
     assert exc_mismatch.value.status_code == 403
 
     with pytest.raises(HTTPException) as exc_del:
-        delete_document(doc_id=doc_b.id, x_tenant_id=org_a, db=db)
+        delete_document(doc_id=doc_b.id, x_tenant_id=org_a, user=user_org_a, db=db)
     assert exc_del.value.status_code == 403
 
     with pytest.raises(HTTPException) as exc_app:
         approve_or_disable_source(
             doc_id=doc_a.id,
             payload=KnowledgeApprovalRequest(action="disable"),
-            x_tenant_id=org_b,
+            x_tenant_id=org_b, user=user_org_b,
             db=db,
         )
     assert exc_app.value.status_code == 403
@@ -283,6 +289,7 @@ def test_company_onboarding_and_strict_tenant_isolation(db):
 def test_ssrf_guard_blocks_internal_private_metadata_and_bad_schemes(db, malicious_url):
     tenant_a = db.query(Agent).filter(Agent.company == "Aura Solar Energy Pvt Ltd").order_by(Agent.created_at.desc()).first()
     org_a = tenant_a.organization_id
+    user_org_a = make_user(db, org_a)
 
     with pytest.raises(HTTPException) as exc_info:
         ingest_website_source(
@@ -291,7 +298,7 @@ def test_ssrf_guard_blocks_internal_private_metadata_and_bad_schemes(db, malicio
                 url=malicious_url,
                 simulated_html_pages={malicious_url: "<html><body>Secret</body></html>"},
             ),
-            x_tenant_id=org_a,
+            x_tenant_id=org_a, user=user_org_a,
             db=db,
         )
     assert exc_info.value.status_code == 400
@@ -301,6 +308,7 @@ def test_ssrf_guard_blocks_internal_private_metadata_and_bad_schemes(db, malicio
 def test_ssrf_blocks_unsafe_redirect_to_cloud_metadata(db):
     tenant_a = db.query(Agent).filter(Agent.company == "Aura Solar Energy Pvt Ltd").order_by(Agent.created_at.desc()).first()
     org_a = tenant_a.organization_id
+    user_org_a = make_user(db, org_a)
     start_url = "https://aurasolar.example.com/docs/redirect-trap"
 
     with pytest.raises(HTTPException) as exc_info:
@@ -312,7 +320,7 @@ def test_ssrf_blocks_unsafe_redirect_to_cloud_metadata(db):
                     start_url: "REDIRECT: http://169.254.169.254/latest/meta-data/"
                 },
             ),
-            x_tenant_id=org_a,
+            x_tenant_id=org_a, user=user_org_a,
             db=db,
         )
     assert exc_info.value.status_code == 400
@@ -322,6 +330,7 @@ def test_ssrf_blocks_unsafe_redirect_to_cloud_metadata(db):
 def test_website_crawler_robots_txt_scope_and_canonical_deduplication(db):
     tenant_a = db.query(Agent).filter(Agent.company == "Aura Solar Energy Pvt Ltd").order_by(Agent.created_at.desc()).first()
     org_a = tenant_a.organization_id
+    user_org_a = make_user(db, org_a)
 
     robots_txt = "User-agent: *\nDisallow: /docs/private\n"
     pages = {
@@ -356,7 +365,7 @@ def test_website_crawler_robots_txt_scope_and_canonical_deduplication(db):
             simulated_robots_txt=robots_txt,
             auto_approve=True,
         ),
-        x_tenant_id=org_a,
+        x_tenant_id=org_a, user=user_org_a,
         db=db,
     )
     # Duplicate canonical URL and robots-disallowed /docs/private and external link must all be excluded!
@@ -373,6 +382,7 @@ def test_website_crawler_robots_txt_scope_and_canonical_deduplication(db):
 def test_document_ingestion_csv_docx_pdf_and_scanned_pdf_rejection(db):
     tenant_a = db.query(Agent).filter(Agent.company == "Aura Solar Energy Pvt Ltd").order_by(Agent.created_at.desc()).first()
     org_a = tenant_a.organization_id
+    user_org_a = make_user(db, org_a)
 
     # A. CSV Table Ingestion
     csv_doc = ingest_document_source(
@@ -383,7 +393,7 @@ def test_document_ingestion_csv_docx_pdf_and_scanned_pdf_rejection(db):
             raw_text="Model,Capacity_kW,Warranty_Years,Price_INR\nAuraGrid-3K,3kW,10 Years,42000\nAuraGrid-5K,5kW,12 Years,64000",
             auto_approve=True,
         ),
-        x_tenant_id=org_a,
+        x_tenant_id=org_a, user=user_org_a,
         db=db,
     )
     assert csv_doc.source_type == "csv"
@@ -402,7 +412,7 @@ def test_document_ingestion_csv_docx_pdf_and_scanned_pdf_rejection(db):
             file_content_base64=base64.b64encode(docx_bytes).decode("utf-8"),
             auto_approve=True,
         ),
-        x_tenant_id=org_a,
+        x_tenant_id=org_a, user=user_org_a,
         db=db,
     )
     assert docx_doc.source_type == "docx"
@@ -423,7 +433,7 @@ def test_document_ingestion_csv_docx_pdf_and_scanned_pdf_rejection(db):
             file_content_base64=base64.b64encode(pdf_bytes).decode("utf-8"),
             auto_approve=True,
         ),
-        x_tenant_id=org_a,
+        x_tenant_id=org_a, user=user_org_a,
         db=db,
     )
     assert pdf_doc.source_type == "pdf"
@@ -432,7 +442,7 @@ def test_document_ingestion_csv_docx_pdf_and_scanned_pdf_rejection(db):
     # Verify page number citation on Page 2 search
     pdf_search = search_knowledge_endpoint(
         query_req=KnowledgeSearchQuery(query="Bi-directional smart meter installation cost", organization_id=org_a),
-        x_tenant_id=org_a,
+        x_tenant_id=org_a, user=user_org_a,
         db=db,
     )
     assert len(pdf_search) >= 1
@@ -448,7 +458,7 @@ def test_document_ingestion_csv_docx_pdf_and_scanned_pdf_rejection(db):
                 file_name="scanned_brochure.pdf",
                 file_content_base64=base64.b64encode(scanned_bytes).decode("utf-8"),
             ),
-            x_tenant_id=org_a,
+            x_tenant_id=org_a, user=user_org_a,
             db=db,
         )
     assert exc_ocr.value.status_code == 422
@@ -462,7 +472,7 @@ def test_document_ingestion_csv_docx_pdf_and_scanned_pdf_rejection(db):
                 file_name="payload.exe",
                 raw_text="MZ binary",
             ),
-            x_tenant_id=org_a,
+            x_tenant_id=org_a, user=user_org_a,
             db=db,
         )
     assert exc_ext.value.status_code == 422
@@ -475,6 +485,7 @@ def test_document_ingestion_csv_docx_pdf_and_scanned_pdf_rejection(db):
 def test_instructor_approval_gate_version_replacement_expiry_and_deletion(db):
     tenant_b = db.query(Agent).filter(Agent.company == "MedLife Care Hospital").order_by(Agent.created_at.desc()).first()
     org_b = tenant_b.organization_id
+    user_org_b = make_user(db, org_b)
 
     # 1. Ingest with `auto_approve=False` -> status is `pending_review`
     pending_doc = ingest_document_source(
@@ -485,7 +496,7 @@ def test_instructor_approval_gate_version_replacement_expiry_and_deletion(db):
             raw_text="MedLife 128-Slice Cardiac CT Angiography package is priced at Rs 6,200 during April.",
             auto_approve=False,
         ),
-        x_tenant_id=org_b,
+        x_tenant_id=org_b, user=user_org_b,
         db=db,
     )
     assert pending_doc.approval_status == "pending_review"
@@ -493,7 +504,7 @@ def test_instructor_approval_gate_version_replacement_expiry_and_deletion(db):
     # Must NOT be retrievable before instructor approval!
     unapproved_search = search_knowledge_endpoint(
         query_req=KnowledgeSearchQuery(query="128-Slice Cardiac CT Angiography package price", organization_id=org_b),
-        x_tenant_id=org_b,
+        x_tenant_id=org_b, user=user_org_b,
         db=db,
     )
     assert all(r.document_id != pending_doc.id for r in unapproved_search)
@@ -502,14 +513,14 @@ def test_instructor_approval_gate_version_replacement_expiry_and_deletion(db):
     approved_doc = approve_or_disable_source(
         doc_id=pending_doc.id,
         payload=KnowledgeApprovalRequest(action="approve", actor="dr.mehta@medlifecare.in"),
-        x_tenant_id=org_b,
+        x_tenant_id=org_b, user=user_org_b,
         db=db,
     )
     assert approved_doc.approval_status == "approved"
 
     approved_search = search_knowledge_endpoint(
         query_req=KnowledgeSearchQuery(query="128-Slice Cardiac CT Angiography package price", organization_id=org_b),
-        x_tenant_id=org_b,
+        x_tenant_id=org_b, user=user_org_b,
         db=db,
     )
     assert any(r.document_id == pending_doc.id and "6,200" in r.text for r in approved_search)
@@ -521,14 +532,14 @@ def test_instructor_approval_gate_version_replacement_expiry_and_deletion(db):
             content="MedLife 128-Slice Cardiac CT Angiography revised 2026 package price is Rs 5,400.",
             actor="dr.mehta@medlifecare.in",
         ),
-        x_tenant_id=org_b,
+        x_tenant_id=org_b, user=user_org_b,
         db=db,
     )
     assert replaced_doc.version == 2
 
     v2_search = search_knowledge_endpoint(
         query_req=KnowledgeSearchQuery(query="128-Slice Cardiac CT Angiography package price", organization_id=org_b),
-        x_tenant_id=org_b,
+        x_tenant_id=org_b, user=user_org_b,
         db=db,
     )
     assert any(r.document_id == pending_doc.id and "5,400" in r.text and "v2" in r.citation for r in v2_search)
@@ -542,13 +553,13 @@ def test_instructor_approval_gate_version_replacement_expiry_and_deletion(db):
 
     expired_search = search_knowledge_endpoint(
         query_req=KnowledgeSearchQuery(query="128-Slice Cardiac CT Angiography package price", organization_id=org_b),
-        x_tenant_id=org_b,
+        x_tenant_id=org_b, user=user_org_b,
         db=db,
     )
     assert all(r.document_id != pending_doc.id for r in expired_search)
 
     # 5. Delete source -> chunks removed and cache invalidated
-    delete_document(doc_id=pending_doc.id, x_tenant_id=org_b, db=db)
+    delete_document(doc_id=pending_doc.id, x_tenant_id=org_b, user=user_org_b, db=db)
     remaining_chunks = db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == pending_doc.id).count()
     assert remaining_chunks == 0
 
@@ -560,6 +571,7 @@ def test_instructor_approval_gate_version_replacement_expiry_and_deletion(db):
 def test_prompt_injection_sanitization_and_runtime_grounding(db):
     tenant_a = db.query(Agent).filter(Agent.company == "Aura Solar Energy Pvt Ltd").order_by(Agent.created_at.desc()).first()
     org_a = tenant_a.organization_id
+    user_org_a = make_user(db, org_a)
 
     # 1. Ingest a web page containing hidden DOM injection + instruction override payload
     adversarial_url = "https://aurasolar.example.com/docs/promo"
@@ -578,7 +590,7 @@ def test_prompt_injection_sanitization_and_runtime_grounding(db):
             simulated_html_pages={adversarial_url: adversarial_html},
             auto_approve=True,
         ),
-        x_tenant_id=org_a,
+        x_tenant_id=org_a, user=user_org_a,
         db=db,
     )
     assert len(ingested_list) == 1
@@ -637,7 +649,7 @@ def test_prompt_injection_sanitization_and_runtime_grounding(db):
     assert "cannot override my system instructions" in turn3["ai_text"]
 
     # Verify audit logs captured ingestion and security events without storing call PII
-    audit_logs = list_knowledge_audit_logs(organization_id=org_a, x_tenant_id=org_a, db=db)
+    audit_logs = list_knowledge_audit_logs(organization_id=org_a, x_tenant_id=org_a, user=user_org_a, db=db)
     assert len(audit_logs) >= 3
     actions_logged = {log.action for log in audit_logs}
     assert "ingest_website" in actions_logged

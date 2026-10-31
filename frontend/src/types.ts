@@ -89,6 +89,8 @@ export interface Call {
   ended_at?: string;
   transcripts?: CallTranscriptTurn[];
   summary?: CallSummary;
+  /** Short-lived signed ticket for opening /ws/voice/{id} (returned by call initiate/detail). */
+  ws_ticket?: string;
 }
 
 export interface InboundLead {

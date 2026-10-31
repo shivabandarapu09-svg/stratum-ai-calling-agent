@@ -20,6 +20,7 @@ from app.database import SessionLocal, init_db
 from app.models import Agent, Call, CallTranscriptTurn
 from app.schemas import CallInitiateRequest
 from app.api.calls import initiate_call
+from conftest import make_user
 from app.api.telephony import (
     twilio_twiml_endpoint,
     twilio_gather_turn_endpoint,
@@ -150,6 +151,7 @@ def test_multi_turn_twilio_gather_conversation_and_company_rag_grounding(db):
                 provider="web_simulator",
             ),
             db=db,
+            user=make_user(db, agent.organization_id),
         )
     )
     call_id = call_out.id
@@ -251,6 +253,7 @@ def test_twilio_status_callback_distinguishes_all_call_states(db):
                 provider="web_simulator",
             ),
             db=db,
+            user=make_user(db, agent.organization_id),
         )
     )
     call_id = call_out.id

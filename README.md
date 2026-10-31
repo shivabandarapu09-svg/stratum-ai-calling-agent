@@ -41,6 +41,16 @@
 
 ---
 
+## 🔐 Authentication & Security
+
+- All dashboard APIs require a **Bearer JWT** from `POST /api/auth/login`; the organization is taken from the token, never from a client header. Superadmins may target other tenants explicitly.
+- First start creates a bootstrap admin (`ADMIN_EMAIL`, default `admin@stratum.ai`). If `ADMIN_PASSWORD` is not set, a random password is printed **once** in the server log. Passwords are stored with bcrypt (legacy SHA-256 hashes are upgraded on first login).
+- Set `SECRET_KEY` and `WEBHOOK_SECRET` in `.env` (see `.env.example`). With `APP_ENV=production` the server refuses to start without them.
+- Lead sources (Meta, Zapier, IndiaMART…) must send `X-Webhook-Secret: <WEBHOOK_SECRET>` to `/api/leads/webhook`.
+- Twilio webhooks are rejected unless they carry a valid `X-Twilio-Signature` (`ENFORCE_TWILIO_SIGNATURES`). The voice WebSocket requires a short-lived signed call ticket returned by the calls API.
+
+---
+
 ## 🛠️ Quickstart: Running Stratum AI Locally
 
 ### 1. Start the FastAPI Backend Server

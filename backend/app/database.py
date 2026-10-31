@@ -1,5 +1,6 @@
 import os
 import hashlib
+import secrets
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
@@ -21,8 +22,7 @@ def get_db():
     finally:
         db.close()
 
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+from app.passwords import hash_password  # noqa: E402,F401  (bcrypt; re-exported for backwards compatibility)
 
 def utc_now():
     return datetime.now(timezone.utc)
@@ -49,13 +49,23 @@ def seed_database(db: Session):
         db.commit()
 
     # 2. Admin User
-    admin = db.query(User).filter(User.email == "admin@stratum.ai").first()
+    admin_password = settings.ADMIN_PASSWORD
+    generated_password = False
+    if not admin_password:
+        admin_password = secrets.token_urlsafe(12)
+        generated_password = True
+    admin = db.query(User).filter(User.email == settings.ADMIN_EMAIL).first()
     if not admin:
+        if generated_password:
+            print(
+                f"[Stratum DB] Created bootstrap admin '{settings.ADMIN_EMAIL}' with generated password: "
+                f"{admin_password}  (shown once - set ADMIN_PASSWORD in .env to choose your own)"
+            )
         admin = User(
             id="user-admin-001",
             organization_id=org.id,
-            email="admin@stratum.ai",
-            hashed_password=hash_password("admin123"),
+            email=settings.ADMIN_EMAIL,
+            hashed_password=hash_password(admin_password),
             full_name="Vikramaditya Roy",
             role="superadmin",
             created_at=utc_now()

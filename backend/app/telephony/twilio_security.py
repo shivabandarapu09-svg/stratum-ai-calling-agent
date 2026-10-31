@@ -16,7 +16,7 @@ import hashlib
 import base64
 import logging
 from typing import Dict, Any, Tuple, Optional
-from fastapi import Request
+from fastapi import HTTPException, Request, status
 from app.config import settings
 
 logger = logging.getLogger("stratum.telephony.security")
@@ -130,7 +130,9 @@ async def verify_twilio_webhook_request(
         return True, "No signature header provided (permissive mode)"
 
     if not auth_token:
-        # Cannot verify without Twilio Auth Token configured
+        if enforce_signature:
+            return False, "Twilio Auth Token not configured; cannot verify webhook signature"
+        # Cannot verify without Twilio Auth Token configured (permissive dev mode only)
         return True, "Twilio Auth Token not configured, skipping validation"
 
     canonical_url = get_effective_twilio_request_url(request)
@@ -161,3 +163,24 @@ async def verify_twilio_webhook_request(
         return False, f"Twilio signature verification failed for {canonical_url}"
 
     return True, "Signature verified successfully"
+
+
+async def require_twilio_signature(request: Request) -> None:
+    """
+    FastAPI dependency for Twilio-facing webhooks (`dependencies=[Depends(require_twilio_signature)]`).
+    Rejects requests without a valid `X-Twilio-Signature` unless ENFORCE_TWILIO_SIGNATURES is disabled.
+    """
+    if not settings.ENFORCE_TWILIO_SIGNATURES:
+        return
+
+    params: Dict[str, Any] = {}
+    if request.method == "POST":
+        content_type = request.headers.get("content-type", "").lower()
+        if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+            form = await request.form()
+            params = {k: v for k, v in form.items()}
+
+    ok, reason = await verify_twilio_webhook_request(request, params, enforce_signature=True)
+    if not ok:
+        logger.warning("Rejected Twilio webhook %s %s: %s", request.method, request.url.path, reason)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid Twilio signature")

@@ -27,7 +27,9 @@ from app.models import (
     KnowledgeDoc,
     Organization,
     TenantWorkspaceProfile,
+    User,
 )
+from app.security import get_current_user, require_admin, require_superadmin
 from app.schemas import (
     DocumentFileIngestRequest,
     KnowledgeApprovalRequest,
@@ -83,14 +85,23 @@ def _log_audit(
     db.commit()
 
 
+def _can_access_org(user: User, organization_id: str) -> bool:
+    """A user may act on their own organization; superadmins may act on any tenant."""
+    return user.organization_id == organization_id or user.role == "superadmin"
+
+
 def _resolve_tenant_id(
     db: Session,
+    user: User,
     explicit_org_id: Optional[str] = None,
     x_tenant_id: Optional[str] = None,
 ) -> str:
     """
-    Resolves and validates the active tenant `organization_id`.
-    If both `X-Tenant-ID` header and `explicit_org_id` are supplied and mismatch, raises 403 Forbidden.
+    Resolves the active tenant `organization_id` for an AUTHENTICATED user.
+
+    The tenant is derived from the user's own organization. `X-Tenant-ID` / `organization_id` are only
+    honoured as a *target selector* and only when the authenticated user is allowed to act on that
+    tenant (own org, or superadmin). Any mismatch or unauthorised target raises 403.
     """
     if x_tenant_id and explicit_org_id and x_tenant_id != explicit_org_id:
         raise HTTPException(
@@ -98,17 +109,26 @@ def _resolve_tenant_id(
             detail="Tenant isolation violation: X-Tenant-ID header does not match requested organization_id.",
         )
 
-    target_id = x_tenant_id or explicit_org_id
-    if target_id:
-        org = db.query(Organization).filter(Organization.id == target_id).first()
-        if not org:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant organization '{target_id}' not found.")
-        return org.id
+    target_id = x_tenant_id or explicit_org_id or user.organization_id
+    if not _can_access_org(user, target_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant isolation violation: you do not have access to this organization.",
+        )
 
-    default_org = db.query(Organization).first()
-    if not default_org:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No organization initialized.")
-    return default_org.id
+    org = db.query(Organization).filter(Organization.id == target_id).first()
+    if not org:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tenant organization '{target_id}' not found.")
+    return org.id
+
+
+def _validate_agent_in_tenant(db: Session, agent_id: Optional[str], tenant_id: str) -> None:
+    """Reject attempts to attach knowledge to (or search through) another tenant's agent."""
+    if not agent_id:
+        return
+    exists = db.query(Agent.id).filter(Agent.id == agent_id, Agent.organization_id == tenant_id).first()
+    if not exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found in this organization.")
 
 
 def _doc_to_out(d: KnowledgeDoc) -> KnowledgeDocOut:
@@ -144,13 +164,19 @@ def _doc_to_out(d: KnowledgeDoc) -> KnowledgeDocOut:
 # ==============================================================================
 
 @router.get("/tenants", response_model=List[TenantWorkspaceOut])
-def list_tenant_workspaces(db: Session = Depends(get_db)):
-    profiles = db.query(TenantWorkspaceProfile).order_by(TenantWorkspaceProfile.created_at.asc()).all()
-    return profiles
+def list_tenant_workspaces(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    query = db.query(TenantWorkspaceProfile)
+    if user.role != "superadmin":
+        query = query.filter(TenantWorkspaceProfile.organization_id == user.organization_id)
+    return query.order_by(TenantWorkspaceProfile.created_at.asc()).all()
 
 
 @router.post("/tenants/onboard", response_model=TenantWorkspaceOut, status_code=status.HTTP_201_CREATED)
-def onboard_company_tenant(payload: TenantWorkspaceOnboardRequest, db: Session = Depends(get_db)):
+def onboard_company_tenant(
+    payload: TenantWorkspaceOnboardRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_superadmin),
+):
     """
     Creates an isolated company/tenant workspace (`Organization` + `TenantWorkspaceProfile` + default `Agent`).
     """
@@ -175,7 +201,7 @@ def onboard_company_tenant(payload: TenantWorkspaceOnboardRequest, db: Session =
         freshness_policy_hours=payload.freshness_policy_hours,
         auto_recrawl_enabled=payload.auto_recrawl_enabled,
         require_instructor_approval=payload.require_instructor_approval,
-        updated_by=payload.instructor_email,
+        updated_by=user.email,
         updated_at=utc_now(),
         created_at=utc_now(),
     )
@@ -215,7 +241,7 @@ def onboard_company_tenant(payload: TenantWorkspaceOnboardRequest, db: Session =
         db=db,
         organization_id=org.id,
         action="onboard_tenant",
-        actor=payload.instructor_email,
+        actor=user.email,
         details={"company_name": payload.company_name, "agent_id": tenant_agent.id},
     )
     return profile
@@ -225,9 +251,10 @@ def onboard_company_tenant(payload: TenantWorkspaceOnboardRequest, db: Session =
 def get_tenant_workspace(
     organization_id: str,
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    resolved_id = _resolve_tenant_id(db, explicit_org_id=organization_id, x_tenant_id=x_tenant_id)
+    resolved_id = _resolve_tenant_id(db, user, explicit_org_id=organization_id, x_tenant_id=x_tenant_id)
     profile = (
         db.query(TenantWorkspaceProfile)
         .filter(TenantWorkspaceProfile.organization_id == resolved_id)
@@ -243,9 +270,10 @@ def update_tenant_workspace(
     organization_id: str,
     payload: TenantWorkspaceUpdateRequest,
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    resolved_id = _resolve_tenant_id(db, explicit_org_id=organization_id, x_tenant_id=x_tenant_id)
+    resolved_id = _resolve_tenant_id(db, user, explicit_org_id=organization_id, x_tenant_id=x_tenant_id)
     profile = (
         db.query(TenantWorkspaceProfile)
         .filter(TenantWorkspaceProfile.organization_id == resolved_id)
@@ -266,7 +294,7 @@ def update_tenant_workspace(
         db=db,
         organization_id=resolved_id,
         action="update_workspace_profile",
-        actor=payload.updated_by,
+        actor=user.email,
         details={"updated_fields": list(update_fields.keys())},
     )
     return profile
@@ -280,9 +308,11 @@ def update_tenant_workspace(
 def ingest_website_source(
     payload: WebsiteIngestRequest,
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    tenant_id = _resolve_tenant_id(db, explicit_org_id=payload.organization_id, x_tenant_id=x_tenant_id)
+    tenant_id = _resolve_tenant_id(db, user, explicit_org_id=payload.organization_id, x_tenant_id=x_tenant_id)
+    _validate_agent_in_tenant(db, payload.agent_id, tenant_id)
     profile = (
         db.query(TenantWorkspaceProfile)
         .filter(TenantWorkspaceProfile.organization_id == tenant_id)
@@ -391,7 +421,7 @@ def ingest_website_source(
                 content_hash=page.content_hash,
                 version=1,
                 approval_status=approval_state,
-                approved_by="auto_approved" if approval_state == "approved" else None,
+                approved_by=user.email if approval_state == "approved" else None,
                 approved_at=utc_now() if approval_state == "approved" else None,
                 is_active=True,
                 ingestion_status="indexed",
@@ -450,9 +480,11 @@ def ingest_website_source(
 def ingest_document_source(
     payload: DocumentFileIngestRequest,
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    tenant_id = _resolve_tenant_id(db, explicit_org_id=payload.organization_id, x_tenant_id=x_tenant_id)
+    tenant_id = _resolve_tenant_id(db, user, explicit_org_id=payload.organization_id, x_tenant_id=x_tenant_id)
+    _validate_agent_in_tenant(db, payload.agent_id, tenant_id)
     raw_bytes: Optional[bytes] = None
     if payload.file_content_base64:
         try:
@@ -496,7 +528,7 @@ def ingest_document_source(
         content_hash=parsed.content_hash,
         version=1,
         approval_status=approval_state,
-        approved_by="instructor_auto" if approval_state == "approved" else None,
+        approved_by=user.email if approval_state == "approved" else None,
         approved_at=utc_now() if approval_state == "approved" else None,
         is_active=True,
         ingestion_status="indexed",
@@ -554,6 +586,7 @@ async def upload_multipart_document(
     title: Optional[str] = Form(default=None),
     auto_approve: bool = Form(default=False),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     raw_bytes = await file.read()
@@ -566,7 +599,7 @@ async def upload_multipart_document(
         title=title or file.filename,
         auto_approve=auto_approve,
     )
-    return ingest_document_source(payload=req, x_tenant_id=x_tenant_id, db=db)
+    return ingest_document_source(payload=req, x_tenant_id=x_tenant_id, user=user, db=db)
 
 
 # ==============================================================================
@@ -578,9 +611,10 @@ def list_documents(
     organization_id: Optional[str] = Query(default=None),
     approval_status: Optional[str] = Query(default=None),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    tenant_id = _resolve_tenant_id(db, explicit_org_id=organization_id, x_tenant_id=x_tenant_id)
+    tenant_id = _resolve_tenant_id(db, user, explicit_org_id=organization_id, x_tenant_id=x_tenant_id)
     q = db.query(KnowledgeDoc).filter(KnowledgeDoc.organization_id == tenant_id)
     if approval_status:
         q = q.filter(KnowledgeDoc.approval_status == approval_status)
@@ -592,9 +626,11 @@ def list_documents(
 def create_document(
     payload: KnowledgeDocCreate,
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    tenant_id = _resolve_tenant_id(db, explicit_org_id=payload.organization_id, x_tenant_id=x_tenant_id)
+    tenant_id = _resolve_tenant_id(db, user, explicit_org_id=payload.organization_id, x_tenant_id=x_tenant_id)
+    _validate_agent_in_tenant(db, payload.agent_id, tenant_id)
     sanitized_content, inj_flagged, warnings = PromptInjectionSanitizer.sanitize(payload.content)
     if not sanitized_content:
         raise HTTPException(status_code=422, detail="Document content is empty.")
@@ -614,7 +650,7 @@ def create_document(
         content_hash=content_hash,
         version=1,
         approval_status=approval_state,
-        approved_by="instructor@stratum.ai" if approval_state == "approved" else None,
+        approved_by=user.email if approval_state == "approved" else None,
         approved_at=utc_now() if approval_state == "approved" else None,
         is_active=True,
         ingestion_status="indexed",
@@ -649,16 +685,17 @@ def approve_or_disable_source(
     doc_id: str,
     payload: KnowledgeApprovalRequest,
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     doc = db.query(KnowledgeDoc).filter(KnowledgeDoc.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    if x_tenant_id and doc.organization_id != x_tenant_id:
+    if not _can_access_org(user, doc.organization_id):
         _log_audit(
             db=db,
-            organization_id=x_tenant_id,
+            organization_id=user.organization_id,
             document_id=doc_id,
             action="cross_tenant_approval_blocked",
             status_str="forbidden",
@@ -669,7 +706,7 @@ def approve_or_disable_source(
     if action == "approve":
         doc.approval_status = "approved"
         doc.is_active = True
-        doc.approved_by = payload.actor
+        doc.approved_by = user.email
         doc.approved_at = utc_now()
     elif action == "disable":
         doc.approval_status = "disabled"
@@ -685,7 +722,7 @@ def approve_or_disable_source(
         db=db,
         organization_id=doc.organization_id,
         document_id=doc.id,
-        actor=payload.actor,
+        actor=user.email,
         action=f"{action}_source",
         details={"title": doc.title, "approval_status": doc.approval_status},
     )
@@ -697,6 +734,7 @@ def replace_knowledge_source(
     doc_id: str,
     payload: KnowledgeSourceReplaceRequest,
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -707,7 +745,7 @@ def replace_knowledge_source(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    if x_tenant_id and doc.organization_id != x_tenant_id:
+    if not _can_access_org(user, doc.organization_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-tenant modification denied.")
 
     sanitized_content, inj_flagged, warnings = PromptInjectionSanitizer.sanitize(payload.content)
@@ -725,7 +763,7 @@ def replace_knowledge_source(
     if payload.auto_approve:
         doc.approval_status = "approved"
         doc.is_active = True
-        doc.approved_by = payload.actor
+        doc.approved_by = user.email
         doc.approved_at = utc_now()
 
     # Delete old chunks and re-index new chunks
@@ -751,7 +789,7 @@ def replace_knowledge_source(
         db=db,
         organization_id=doc.organization_id,
         document_id=doc.id,
-        actor=payload.actor,
+        actor=user.email,
         action="replace_source",
         details={"version": doc.version, "content_hash": doc.content_hash},
     )
@@ -762,16 +800,17 @@ def replace_knowledge_source(
 def delete_document(
     doc_id: str,
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     doc = db.query(KnowledgeDoc).filter(KnowledgeDoc.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    if x_tenant_id and doc.organization_id != x_tenant_id:
+    if not _can_access_org(user, doc.organization_id):
         _log_audit(
             db=db,
-            organization_id=x_tenant_id,
+            organization_id=user.organization_id,
             document_id=doc_id,
             action="cross_tenant_delete_blocked",
             status_str="forbidden",
@@ -798,9 +837,11 @@ def delete_document(
 def test_search(
     query_req: KnowledgeSearchQuery,
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    tenant_id = _resolve_tenant_id(db, explicit_org_id=query_req.organization_id, x_tenant_id=x_tenant_id)
+    tenant_id = _resolve_tenant_id(db, user, explicit_org_id=query_req.organization_id, x_tenant_id=x_tenant_id)
+    _validate_agent_in_tenant(db, query_req.agent_id, tenant_id)
     results = rag_engine.search(
         db=db,
         query=query_req.query,
@@ -829,9 +870,10 @@ def test_search(
 def list_knowledge_audit_logs(
     organization_id: Optional[str] = Query(default=None),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-ID"),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    tenant_id = _resolve_tenant_id(db, explicit_org_id=organization_id, x_tenant_id=x_tenant_id)
+    tenant_id = _resolve_tenant_id(db, user, explicit_org_id=organization_id, x_tenant_id=x_tenant_id)
     logs = (
         db.query(KnowledgeAuditLog)
         .filter(KnowledgeAuditLog.organization_id == tenant_id)
